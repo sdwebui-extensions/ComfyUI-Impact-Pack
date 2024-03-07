@@ -6,6 +6,8 @@ import threading
 import locale
 import traceback
 import re
+from comfy.cli_args import args
+
 
 
 if sys.argv[0] == 'install.py':
@@ -252,6 +254,8 @@ try:
         print("### ComfyUI-Impact-Pack: Check basic models")
 
         model_path = folder_paths.models_dir
+        if args.just_ui:
+            model_path = os.path.join(os.path.dirname(args.data_dir), 'models')
 
         bbox_path = os.path.join(model_path, "mmdets", "bbox")
         sam_path = os.path.join(model_path, "sams")
