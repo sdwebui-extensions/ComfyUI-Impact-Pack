@@ -26,10 +26,13 @@ import comfy.model_management
 import base64
 import impact.wildcards as wildcards
 from . import hooks
+from comfy.cli_args import args
 
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
 model_path = folder_paths.models_dir
+if args.just_ui:
+    model_path = os.path.join(os.path.dirname(args.data_dir), 'models')
 
 
 # folder_paths.supported_pt_extensions
