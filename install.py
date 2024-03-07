@@ -114,6 +114,7 @@ try:
 
 
     def ensure_subpack():
+        return
         import git
         if os.path.exists(subpack_path):
             try:
