@@ -44,7 +44,8 @@ if os.path.exists('/stable-diffusion-cache/models/sams'):
         if not os.path.exists(os.path.join(model_path, "sams", filename)):
             sam_file_pairs.append([os.path.join("/stable-diffusion-cache/models/sams", filename), os.path.join(model_path, "sams", filename)])
             # os.popen(f'cp {os.path.join("/stable-diffusion-cache/models/sams", filename)} {os.path.join(model_path, "sams", filename)}')
-    async_file_cp(sam_file_pairs)
+    if not args.just_ui:
+        async_file_cp(sam_file_pairs)
 if os.path.exists('/stable-diffusion-cache/models/mmdets'):
     if not os.path.exists(os.path.join(model_path, "mmdets")):
         os.makedirs(os.path.join(model_path, "mmdets"), exist_ok=True)
@@ -56,7 +57,8 @@ if os.path.exists('/stable-diffusion-cache/models/mmdets'):
             if not os.path.exists(os.path.dirname(tgt_path)):
                 os.makedirs(os.path.dirname(tgt_path), exist_ok=True)
             mmdet_file_pairs.append([src_path, tgt_path])
-    async_file_cp(mmdet_file_pairs)
+    if not args.just_ui:
+        async_file_cp(mmdet_file_pairs)
             # os.popen(f'cp {src_path} {tgt_path}')
 # folder_paths.supported_pt_extensions
 add_folder_path_and_extensions("mmdets_bbox", [os.path.join(model_path, "mmdets", "bbox")], folder_paths.supported_pt_extensions)
