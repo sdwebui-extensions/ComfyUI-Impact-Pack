@@ -27,6 +27,8 @@ import base64
 import impact.wildcards as wildcards
 from . import hooks
 from comfy.cli_args import args
+from file_utils import async_file_cp
+
 
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
@@ -37,19 +39,25 @@ if args.just_ui:
 if os.path.exists('/stable-diffusion-cache/models/sams'):
     if not os.path.exists(os.path.join(model_path, "sams")):
         os.makedirs(os.path.join(model_path, "sams"), exist_ok=True)
+    sam_file_pairs = []
     for filename in os.listdir('/stable-diffusion-cache/models/sams'):
         if not os.path.exists(os.path.join(model_path, "sams", filename)):
-            os.popen(f'cp {os.path.join("/stable-diffusion-cache/models/sams", filename)} {os.path.join(model_path, "sams", filename)}')
+            sam_file_pairs.append([os.path.join("/stable-diffusion-cache/models/sams", filename), os.path.join(model_path, "sams", filename)])
+            # os.popen(f'cp {os.path.join("/stable-diffusion-cache/models/sams", filename)} {os.path.join(model_path, "sams", filename)}')
+    async_file_cp(sam_file_pairs)
 if os.path.exists('/stable-diffusion-cache/models/mmdets'):
     if not os.path.exists(os.path.join(model_path, "mmdets")):
         os.makedirs(os.path.join(model_path, "mmdets"), exist_ok=True)
+    mmdet_file_pairs = []
     for upper_folder, _, filenames in os.walk('/stable-diffusion-cache/models/mmdets'):
         for filename in filenames:
             src_path = os.path.join(upper_folder, filename)
             tgt_path = src_path.replace('/stable-diffusion-cache/models', model_path)
             if not os.path.exists(os.path.dirname(tgt_path)):
                 os.makedirs(os.path.dirname(tgt_path), exist_ok=True)
-            os.popen(f'cp {src_path} {tgt_path}')
+            mmdet_file_pairs.append([src_path, tgt_path])
+    async_file_cp(mmdet_file_pairs)
+            # os.popen(f'cp {src_path} {tgt_path}')
 # folder_paths.supported_pt_extensions
 add_folder_path_and_extensions("mmdets_bbox", [os.path.join(model_path, "mmdets", "bbox")], folder_paths.supported_pt_extensions)
 add_folder_path_and_extensions("mmdets_segm", [os.path.join(model_path, "mmdets", "segm")], folder_paths.supported_pt_extensions)
