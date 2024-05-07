@@ -61,10 +61,10 @@ if os.path.exists('/stable-diffusion-cache/models/mmdets'):
         async_file_cp(mmdet_file_pairs)
             # os.popen(f'cp {src_path} {tgt_path}')
 # folder_paths.supported_pt_extensions
-add_folder_path_and_extensions("mmdets_bbox", [os.path.join(model_path, "mmdets", "bbox")], folder_paths.supported_pt_extensions)
-add_folder_path_and_extensions("mmdets_segm", [os.path.join(model_path, "mmdets", "segm")], folder_paths.supported_pt_extensions)
-add_folder_path_and_extensions("mmdets", [os.path.join(model_path, "mmdets")], folder_paths.supported_pt_extensions)
-add_folder_path_and_extensions("sams", [os.path.join(model_path, "sams")], folder_paths.supported_pt_extensions)
+add_folder_path_and_extensions("mmdets_bbox", [os.path.join(model_path, "mmdets", "bbox"), "/stable-diffusion-cache/models/mmdets/bbox"], folder_paths.supported_pt_extensions)
+add_folder_path_and_extensions("mmdets_segm", [os.path.join(model_path, "mmdets", "segm"), "/stable-diffusion-cache/models/mmdets/segm"], folder_paths.supported_pt_extensions)
+add_folder_path_and_extensions("mmdets", [os.path.join(model_path, "mmdets"), "/stable-diffusion-cache/models/mmdets"], folder_paths.supported_pt_extensions)
+add_folder_path_and_extensions("sams", [os.path.join(model_path, "sams"), "/stable-diffusion-cache/models/sams"], folder_paths.supported_pt_extensions)
 add_folder_path_and_extensions("onnx", [os.path.join(model_path, "onnx")], {'.onnx'})
 
 
