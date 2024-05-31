@@ -1,3 +1,9 @@
+import copy
+import os
+import warnings
+
+import numpy
+import torch
 from segment_anything import SamPredictor
 
 from impact.utils import *
@@ -21,7 +27,8 @@ from concurrent.futures import ThreadPoolExecutor
 try:
     from comfy_extras import nodes_differential_diffusion
 except Exception:
-    print(f"[Impact Pack] ComfyUI is an outdated version. The DifferentialDiffusion feature will be disabled.")
+    print(f"\n#############################################\n[Impact Pack] ComfyUI is an outdated version.\n#############################################\n")
+    raise Exception("[Impact Pack] ComfyUI is an outdated version.")
 
 
 SEG = namedtuple("SEG",
@@ -32,6 +39,9 @@ pb_id_cnt = time.time()
 preview_bridge_image_id_map = {}
 preview_bridge_image_name_map = {}
 preview_bridge_cache = {}
+
+
+SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD']
 
 
 def set_previewbridge_image(node_id, file, item):
@@ -166,10 +176,7 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
         noise_mask = noise_mask.squeeze(3)
 
         if noise_mask_feather > 0:
-            try:
-                model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
-            except Exception:
-                print(f"[Impact Pack] ComfyUI is an outdated version. The DifferentialDiffusion feature will be disabled.")
+            model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
     if wildcard_opt is not None and wildcard_opt != "":
         model, _, wildcard_positive = wildcards.process_with_loras(wildcard_opt, model, clip)
@@ -261,12 +268,16 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
 
             model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2, upscaled_latent2, denoise2 = \
                 detailer_hook.pre_ksample(model, seed+i, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise)
+            noise, is_touched = detailer_hook.get_custom_noise(seed+i, torch.zeros(latent_image['samples'].size()), is_touched=False)
+            if not is_touched:
+                noise = None
         else:
             model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2, upscaled_latent2, denoise2 = \
                 model, seed + i, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise
+            noise = None
 
         refined_latent = impact_sampling.ksampler_wrapper(model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2,
-                                                          refined_latent, denoise2, refiner_ratio, refiner_model, refiner_clip, refiner_positive, refiner_negative)
+                                                          refined_latent, denoise2, refiner_ratio, refiner_model, refiner_clip, refiner_positive, refiner_negative, noise=noise)
 
     if detailer_hook is not None:
         refined_latent = detailer_hook.pre_decode(refined_latent)
@@ -471,16 +482,58 @@ def sam_predict(predictor, points, plabs, bbox, threshold):
     return total_masks
 
 
-def make_sam_mask(sam_model, segs, image, detection_hint, dilation,
+class SAMWrapper:
+    def __init__(self, model, is_auto_mode, safe_to_gpu=None):
+        self.model = model
+        self.safe_to_gpu = safe_to_gpu if safe_to_gpu is not None else SafeToGPU_stub()
+        self.is_auto_mode = is_auto_mode
+
+    def prepare_device(self):
+        if self.is_auto_mode:
+            device = comfy.model_management.get_torch_device()
+            self.safe_to_gpu.to_device(self.model, device=device)
+
+    def release_device(self):
+        if self.is_auto_mode:
+            self.model.to(device="cpu")
+
+    def predict(self, image, points, plabs, bbox, threshold):
+        predictor = SamPredictor(self.model)
+        predictor.set_image(image, "RGB")
+
+        return sam_predict(predictor, points, plabs, bbox, threshold)
+
+
+class ESAMWrapper:
+    def __init__(self, model, device):
+        self.model = model
+        self.func_inference = nodes.NODE_CLASS_MAPPINGS['Yoloworld_ESAM_Zho']
+        self.device = device
+
+    def prepare_device(self):
+        pass
+
+    def release_device(self):
+        pass
+
+    def predict(self, image, points, plabs, bbox, threshold):
+        if self.device == 'CPU':
+            self.device = 'cpu'
+        else:
+            self.device = 'cuda'
+
+        detected_masks = self.func_inference.inference_sam_with_boxes(image=image, xyxy=[bbox], model=self.model, device=self.device)
+        return [detected_masks.squeeze(0)]
+
+
+def make_sam_mask(sam, segs, image, detection_hint, dilation,
                   threshold, bbox_expansion, mask_hint_threshold, mask_hint_use_negative):
-    if sam_model.is_auto_mode:
-        device = comfy.model_management.get_torch_device()
-        sam_model.safe_to.to_device(sam_model, device=device)
+
+    sam_obj = sam.sam_wrapper
+    sam_obj.prepare_device()
 
     try:
-        predictor = SamPredictor(sam_model)
         image = np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-        predictor.set_image(image, "RGB")
 
         total_masks = []
 
@@ -503,7 +556,7 @@ def make_sam_mask(sam_model, segs, image, detection_hint, dilation,
                 else:
                     plabs.append(1)
 
-            detected_masks = sam_predict(predictor, points, plabs, None, threshold)
+            detected_masks = sam_obj.predict(image, points, plabs, None, threshold)
             total_masks += detected_masks
 
         else:
@@ -572,15 +625,14 @@ def make_sam_mask(sam_model, segs, image, detection_hint, dilation,
                     points += npoints
                     plabs += nplabs
 
-                detected_masks = sam_predict(predictor, points, plabs, dilated_bbox, threshold)
+                detected_masks = sam_obj.predict(image, points, plabs, dilated_bbox, threshold)
                 total_masks += detected_masks
 
         # merge every collected masks
         mask = combine_masks2(total_masks)
 
     finally:
-        if sam_model.is_auto_mode:
-            sam_model.to(device="cpu")
+        sam_obj.release_device()
 
     if mask is not None:
         mask = mask.float()
@@ -714,7 +766,8 @@ def segs_scale_match(segs, target_shape):
         new_w = crop_region[2] - crop_region[0]
         new_h = crop_region[3] - crop_region[1]
 
-        cropped_mask = torch.from_numpy(cropped_mask)
+        if isinstance(cropped_mask, np.ndarray):
+            cropped_mask = torch.from_numpy(cropped_mask)
         cropped_mask = torch.nn.functional.interpolate(cropped_mask.unsqueeze(0).unsqueeze(0), size=(new_h, new_w), mode='bilinear', align_corners=False)
         cropped_mask = cropped_mask.squeeze(0).squeeze(0).numpy()
 
@@ -735,16 +788,13 @@ def every_three_pick_last(stacked_masks):
     return selected_masks
 
 
-def make_sam_mask_segmented(sam_model, segs, image, detection_hint, dilation,
+def make_sam_mask_segmented(sam, segs, image, detection_hint, dilation,
                             threshold, bbox_expansion, mask_hint_threshold, mask_hint_use_negative):
-    if sam_model.is_auto_mode:
-        device = comfy.model_management.get_torch_device()
-        sam_model.safe_to.to_device(sam_model, device=device)
+    sam_obj = sam.sam_wrapper
+    sam_obj.prepare_device()
 
     try:
-        predictor = SamPredictor(sam_model)
         image = np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
-        predictor.set_image(image, "RGB")
 
         total_masks = []
 
@@ -767,7 +817,7 @@ def make_sam_mask_segmented(sam_model, segs, image, detection_hint, dilation,
                 else:
                     plabs.append(1)
 
-            detected_masks = sam_predict(predictor, points, plabs, None, threshold)
+            detected_masks = sam_obj.predict(image, points, plabs, None, threshold)
             total_masks += detected_masks
 
         else:
@@ -785,7 +835,7 @@ def make_sam_mask_segmented(sam_model, segs, image, detection_hint, dilation,
                                                          mask_hint_threshold, use_small_negative,
                                                          mask_hint_use_negative)
 
-                detected_masks = sam_predict(predictor, points, plabs, dilated_bbox, threshold)
+                detected_masks = sam_obj.predict(image, points, plabs, dilated_bbox, threshold)
 
                 total_masks += detected_masks
 
@@ -793,10 +843,7 @@ def make_sam_mask_segmented(sam_model, segs, image, detection_hint, dilation,
         mask = combine_masks2(total_masks)
 
     finally:
-        if sam_model.is_auto_mode:
-            sam_model.cpu()
-
-        pass
+        sam_obj.release_device()
 
     mask_working_device = torch.device("cpu")
 
@@ -836,6 +883,32 @@ def segs_bitwise_and_mask(segs, mask):
         cropped_mask2 = mask[crop_region[1]:crop_region[3], crop_region[0]:crop_region[2]]
 
         new_mask = np.bitwise_and(cropped_mask.astype(np.uint8), cropped_mask2)
+        new_mask = new_mask.astype(np.float32) / 255.0
+
+        item = SEG(seg.cropped_image, new_mask, seg.confidence, seg.crop_region, seg.bbox, seg.label, None)
+        items.append(item)
+
+    return segs[0], items
+
+
+def segs_bitwise_subtract_mask(segs, mask):
+    mask = make_2d_mask(mask)
+
+    if mask is None:
+        print("[SegsBitwiseSubtractMask] Cannot operate: MASK is empty.")
+        return ([],)
+
+    items = []
+
+    mask = (mask.cpu().numpy() * 255).astype(np.uint8)
+
+    for seg in segs[1]:
+        cropped_mask = (seg.cropped_mask * 255).astype(np.uint8)
+        crop_region = seg.crop_region
+
+        cropped_mask2 = mask[crop_region[1]:crop_region[3], crop_region[0]:crop_region[2]]
+
+        new_mask = cv2.subtract(cropped_mask.astype(np.uint8), cropped_mask2)
         new_mask = new_mask.astype(np.float32) / 255.0
 
         item = SEG(seg.cropped_image, new_mask, seg.confidence, seg.crop_region, seg.bbox, seg.label, None)
@@ -939,6 +1012,21 @@ class ONNXDetector:
 
     def setAux(self, x):
         pass
+
+
+def batch_mask_to_segs(mask, combined, crop_factor, bbox_fill, drop_size=1, label='A', crop_min_size=None, detailer_hook=None):
+    combined_mask = mask.max(dim=0).values
+
+    segs = mask_to_segs(combined_mask, combined, crop_factor, bbox_fill, drop_size, label, crop_min_size, detailer_hook)
+
+    new_segs = []
+    for seg in segs[1]:
+        x1, y1, x2, y2 = seg.crop_region
+        cropped_mask = mask[:, y1:y2, x1:x2]
+        item = SEG(None, cropped_mask, 1.0, seg.crop_region, seg.bbox, label, None)
+        new_segs.append(item)
+
+    return segs[0], new_segs
 
 
 def mask_to_segs(mask, combined, crop_factor, bbox_fill, drop_size=1, label='A', crop_min_size=None, detailer_hook=None, is_contour=True):
@@ -1197,8 +1285,11 @@ def vae_encode(vae, pixels, use_tile, hook, tile_size=512):
     return samples
 
 
-def latent_upscale_on_pixel_space_shape(samples, scale_method, w, h, vae, use_tile=False, tile_size=512,
-                                        save_temp_prefix=None, hook=None):
+def latent_upscale_on_pixel_space_shape(samples, scale_method, w, h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
+    return latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+
+
+def latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
     pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
 
     if save_temp_prefix is not None:
@@ -1206,14 +1297,18 @@ def latent_upscale_on_pixel_space_shape(samples, scale_method, w, h, vae, use_ti
 
     pixels = nodes.ImageScale().upscale(pixels, scale_method, int(w), int(h), False)[0]
 
+    old_pixels = pixels
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size)
+    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
 
 
-def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512,
-                                  save_temp_prefix=None, hook=None):
+def latent_upscale_on_pixel_space(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
+    return latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+
+
+def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
     pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
 
     if save_temp_prefix is not None:
@@ -1223,19 +1318,18 @@ def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use
     h = pixels.shape[1] * scale_factor
     pixels = nodes.ImageScale().upscale(pixels, scale_method, int(w), int(h), False)[0]
 
+    old_pixels = pixels
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), pixels)
+    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
 
 
-def latent_upscale_on_pixel_space(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512,
-                                  save_temp_prefix=None, hook=None):
-    return latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+def latent_upscale_on_pixel_space_with_model_shape(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
+    return latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
 
 
-def latent_upscale_on_pixel_space_with_model_shape(samples, scale_method, upscale_model, new_w, new_h, vae,
-                                                   use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
+def latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
     pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
 
     if save_temp_prefix is not None:
@@ -1255,11 +1349,16 @@ def latent_upscale_on_pixel_space_with_model_shape(samples, scale_method, upscal
     # downscale to target scale
     pixels = nodes.ImageScale().upscale(pixels, scale_method, int(new_w), int(new_h), False)[0]
 
+    old_pixels = pixels
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size)
+    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
 
+
+def latent_upscale_on_pixel_space_with_model(samples, scale_method, upscale_model, scale_factor, vae, use_tile=False,
+                                             tile_size=512, save_temp_prefix=None, hook=None):
+    return latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_model, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
 
 def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_model, scale_factor, vae, use_tile=False,
                                               tile_size=512, save_temp_prefix=None, hook=None):
@@ -1286,14 +1385,11 @@ def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_mod
     # downscale to target scale
     pixels = nodes.ImageScale().upscale(pixels, scale_method, int(new_w), int(new_h), False)[0]
 
+    old_pixels = pixels
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), pixels)
-
-def latent_upscale_on_pixel_space_with_model(samples, scale_method, upscale_model, scale_factor, vae, use_tile=False,
-                                             tile_size=512, save_temp_prefix=None, hook=None):
-    return latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_model, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
 
 
 class TwoSamplersForMaskUpscaler:
@@ -1471,8 +1567,8 @@ class PixelKSampleUpscaler:
                 self.hook.pre_ksample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                                       upscaled_latent, denoise)
 
-        refined_latent = nodes.KSampler().sample(model, seed, steps, cfg, sampler_name, scheduler,
-                                                 positive, negative, upscaled_latent, denoise)[0]
+        refined_latent = impact_sampling.impact_sample(model, seed, steps, cfg, sampler_name, scheduler,
+                                                       positive, negative, upscaled_latent, denoise)[0]
         return refined_latent
 
     def upscale_shape(self, step_info, samples, w, h, save_temp_prefix=None):
@@ -1505,7 +1601,7 @@ class PixelKSampleUpscaler:
 
 
 class IPAdapterWrapper:
-    def __init__(self, ipadapter_pipe, weight, noise, weight_type, start_at, end_at, unfold_batch, faceid_v2, weight_v2, reference_image, prev_control_net=None):
+    def __init__(self, ipadapter_pipe, weight, noise, weight_type, start_at, end_at, unfold_batch, weight_v2, reference_image, neg_image=None, prev_control_net=None, combine_embeds='concat'):
         self.reference_image = reference_image
         self.ipadapter_pipe = ipadapter_pipe
         self.weight = weight
@@ -1515,21 +1611,25 @@ class IPAdapterWrapper:
         self.end_at = end_at
         self.unfold_batch = unfold_batch
         self.prev_control_net = prev_control_net
-        self.faceid_v2 = faceid_v2
         self.weight_v2 = weight_v2
         self.image = reference_image
+        self.neg_image = neg_image
+        self.combine_embeds = combine_embeds
 
     # name 'apply_ipadapter' isn't allowed
     def doit_ipadapter(self, model):
         cnet_image_list = [self.image]
         prev_cnet_images = []
 
-        if 'IPAdapterApply' not in nodes.NODE_CLASS_MAPPINGS:
+        if 'IPAdapterAdvanced' not in nodes.NODE_CLASS_MAPPINGS:
+            if 'IPAdapterApply' in nodes.NODE_CLASS_MAPPINGS:
+                raise Exception(f"[ERROR] 'ComfyUI IPAdapter Plus' is outdated.")
+
             utils.try_install_custom_node('https://github.com/cubiq/ComfyUI_IPAdapter_plus',
                                           "To use 'IPAdapterApplySEGS' node, 'ComfyUI IPAdapter Plus' extension is required.")
             raise Exception(f"[ERROR] To use IPAdapterApplySEGS, you need to install 'ComfyUI IPAdapter Plus'")
 
-        obj = nodes.NODE_CLASS_MAPPINGS['IPAdapterApply']
+        obj = nodes.NODE_CLASS_MAPPINGS['IPAdapterAdvanced']
 
         ipadapter, _, clip_vision, insightface, lora_loader = self.ipadapter_pipe
         model = lora_loader(model)
@@ -1537,10 +1637,10 @@ class IPAdapterWrapper:
         if self.prev_control_net is not None:
             model, prev_cnet_images = self.prev_control_net.doit_ipadapter(model)
 
-        model = obj().apply_ipadapter(ipadapter, model, self.weight, clip_vision=clip_vision, image=self.image,
-                                      embeds=None, weight_type=self.weight_type, noise=self.noise,
-                                      attn_mask=None, start_at=self.start_at, end_at=self.end_at,
-                                      unfold_batch=self.unfold_batch, insightface=insightface, faceid_v2=self.faceid_v2, weight_v2=self.weight_v2)[0]
+        model = obj().apply_ipadapter(model=model, ipadapter=ipadapter, weight=self.weight, weight_type=self.weight_type,
+                                      start_at=self.start_at, end_at=self.end_at, combine_embeds=self.combine_embeds,
+                                      clip_vision=clip_vision, image=self.image, image_negative=self.neg_image, attn_mask=None,
+                                      insightface=insightface, weight_faceidv2=self.weight_v2)[0]
 
         cnet_image_list.extend(prev_cnet_images)
 
@@ -1689,25 +1789,39 @@ class PixelTiledKSampleUpscaler:
     def __init__(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                  denoise,
                  tile_width, tile_height, tiling_strategy,
-                 upscale_model_opt=None, hook_opt=None, tile_size=512):
+                 upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512):
         self.params = scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise
         self.vae = vae
         self.tile_params = tile_width, tile_height, tiling_strategy
         self.upscale_model = upscale_model_opt
         self.hook = hook_opt
+        self.tile_cnet = tile_cnet_opt
         self.tile_size = tile_size
         self.is_tiled = True
 
-    def tiled_ksample(self, latent):
+    def tiled_ksample(self, latent, images):
         if "BNK_TiledKSampler" in nodes.NODE_CLASS_MAPPINGS:
             TiledKSampler = nodes.NODE_CLASS_MAPPINGS['BNK_TiledKSampler']
         else:
             utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
                                           "To use 'PixelTiledKSampleUpscalerProvider', 'Tiled sampling for ComfyUI' extension is required.")
-            raise Exception("'BNK_TiledKSampler' node isn't installed.")
+            raise RuntimeError("'BNK_TiledKSampler' node isn't installed.")
 
         scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise = self.params
         tile_width, tile_height, tiling_strategy = self.tile_params
+
+        if self.tile_cnet is not None:
+            image_batch, image_w, image_h, _ = images.shape
+            if image_batch > 1:
+                warnings.warn('Multiple latents in batch, Tile ControlNet being ignored')
+            else:
+                if 'TilePreprocessor' not in nodes.NODE_CLASS_MAPPINGS:
+                    raise RuntimeError("'TilePreprocessor' node (from comfyui_controlnet_aux) isn't installed.")
+                preprocessor = nodes.NODE_CLASS_MAPPINGS['TilePreprocessor']()
+                # might add capacity to set pyrUp_iters later, not needed for now though
+                preprocessed = preprocessor.execute(images, pyrUp_iters=3, resolution=min(image_w, image_h))[0]
+                apply_cnet = getattr(nodes.ControlNetApply(), nodes.ControlNetApply.FUNCTION)
+                positive = apply_cnet(positive, self.tile_cnet, preprocessed, strength=1.0)[0]
 
         return TiledKSampler().sample(model, seed, tile_width, tile_height, tiling_strategy, steps, cfg, sampler_name,
                                       scheduler, positive, negative, latent, denoise)[0]
@@ -1719,19 +1833,18 @@ class PixelTiledKSampleUpscaler:
             self.hook.set_steps(step_info)
 
         if self.upscale_model is None:
-            upscaled_latent = latent_upscale_on_pixel_space(samples, scale_method, upscale_factor, vae,
-                                                            use_tile=True, save_temp_prefix=save_temp_prefix,
-                                                            hook=self.hook,
-                                                            tile_size=self.tile_size)
+            upscaled_latent, upscaled_images = \
+                latent_upscale_on_pixel_space2(samples, scale_method, upscale_factor, vae,
+                                               use_tile=True, save_temp_prefix=save_temp_prefix,
+                                               hook=self.hook, tile_size=self.tile_size)
         else:
-            upscaled_latent = latent_upscale_on_pixel_space_with_model(samples, scale_method, self.upscale_model,
-                                                                       upscale_factor, vae,
-                                                                       use_tile=True,
-                                                                       save_temp_prefix=save_temp_prefix,
-                                                                       hook=self.hook,
-                                                                       tile_size=self.tile_size)
+            upscaled_latent, upscaled_images = \
+                latent_upscale_on_pixel_space_with_model2(samples, scale_method, self.upscale_model,
+                                                          upscale_factor, vae, use_tile=True,
+                                                          save_temp_prefix=save_temp_prefix,
+                                                          hook=self.hook, tile_size=self.tile_size)
 
-        refined_latent = self.tiled_ksample(upscaled_latent)
+        refined_latent = self.tiled_ksample(upscaled_latent, upscaled_images)
 
         return refined_latent
 
@@ -1742,18 +1855,20 @@ class PixelTiledKSampleUpscaler:
             self.hook.set_steps(step_info)
 
         if self.upscale_model is None:
-            upscaled_latent = latent_upscale_on_pixel_space_shape(samples, scale_method, w, h, vae,
-                                                                  use_tile=True, save_temp_prefix=save_temp_prefix,
-                                                                  hook=self.hook, tile_size=self.tile_size)
+            upscaled_latent, upscaled_images = \
+                latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae,
+                                                     use_tile=True, save_temp_prefix=save_temp_prefix,
+                                                     hook=self.hook, tile_size=self.tile_size)
         else:
-            upscaled_latent = latent_upscale_on_pixel_space_with_model_shape(samples, scale_method,
-                                                                             self.upscale_model, w, h, vae,
-                                                                             use_tile=True,
-                                                                             save_temp_prefix=save_temp_prefix,
-                                                                             hook=self.hook,
-                                                                             tile_size=self.tile_size)
+            upscaled_latent, upscaled_images = \
+                latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method,
+                                                                self.upscale_model, w, h, vae,
+                                                                use_tile=True,
+                                                                save_temp_prefix=save_temp_prefix,
+                                                                hook=self.hook,
+                                                                tile_size=self.tile_size)
 
-        refined_latent = self.tiled_ksample(upscaled_latent)
+        refined_latent = self.tiled_ksample(upscaled_latent, upscaled_images)
 
         return refined_latent
 
@@ -1886,6 +2001,12 @@ def adaptive_mask_paste(dest_mask, src_mask, bbox):
     bbox_mask = torch.nn.functional.interpolate(small_mask, size=(y2 - y1, x2 - x1), mode='bilinear', align_corners=False)
     bbox_mask = bbox_mask.squeeze(0).squeeze(0)
     dest_mask[y1:y2, x1:x2] = bbox_mask
+
+
+def crop_condition_mask(mask, image, crop_region):
+    cond_scale = (mask.shape[1] / image.shape[1], mask.shape[2] / image.shape[2])
+    mask_region = [round(v * cond_scale[i % 2]) for i, v in enumerate(crop_region)]
+    return crop_ndarray3(mask, mask_region)
 
 
 class SafeToGPU:

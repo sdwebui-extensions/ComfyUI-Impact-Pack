@@ -18,7 +18,7 @@ class SEGSDetailerForAnimateDiff:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                     "scheduler": (core.SCHEDULERS,),
                      "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
                      "basic_pipe": ("BASIC_PIPE",),
                      "refiner_ratio": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0})
@@ -66,9 +66,27 @@ class SEGSDetailerForAnimateDiff:
                     cropped_image_frames = torch.concat((cropped_image_frames, cropped_image), dim=0)
 
             cropped_image_frames = cropped_image_frames.cpu().numpy()
+
+            # It is assumed that AnimateDiff does not support conditioning masks based on test results, but it will be added for future consideration.
+            cropped_positive = [
+                [condition, {
+                    k: core.crop_condition_mask(v, cropped_image_frames, seg.crop_region) if k == "mask" else v
+                    for k, v in details.items()
+                }]
+                for condition, details in positive
+            ]
+
+            cropped_negative = [
+                [condition, {
+                    k: core.crop_condition_mask(v, cropped_image_frames, seg.crop_region) if k == "mask" else v
+                    for k, v in details.items()
+                }]
+                for condition, details in negative
+            ]
+
             enhanced_image_tensor, cnet_images = core.enhance_detail_for_animatediff(cropped_image_frames, model, clip, vae, guide_size, guide_size_for, max_size,
                                                                                      seg.bbox, seed, steps, cfg, sampler_name, scheduler,
-                                                                                     positive, negative, denoise, seg.cropped_mask,
+                                                                                     cropped_positive, cropped_negative, denoise, seg.cropped_mask,
                                                                                      refiner_ratio=refiner_ratio, refiner_model=refiner_model,
                                                                                      refiner_clip=refiner_clip, refiner_positive=refiner_positive,
                                                                                      refiner_negative=refiner_negative, control_net_wrapper=seg.control_net_wrapper,
@@ -112,7 +130,7 @@ class DetailerForEachPipeForAnimateDiff:
                       "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                       "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                       "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                      "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                      "scheduler": (core.SCHEDULERS,),
                       "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
                       "feather": ("INT", {"default": 5, "min": 0, "max": 100, "step": 1}),
                       "basic_pipe": ("BASIC_PIPE", ),
@@ -152,7 +170,7 @@ class DetailerForEachPipeForAnimateDiff:
                 cnet_image_list.extend(cnet_images)
 
             if detailer_hook is not None:
-                detailer_hook.post_paste(image_frames)
+                image_frames = detailer_hook.post_paste(image_frames)
 
             enhanced_segs += enhanced_seg[1]
 

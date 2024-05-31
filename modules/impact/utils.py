@@ -183,7 +183,8 @@ def tensor_paste(image1, image2, left_top, mask):
     _tensor_check_image(image2)
     _tensor_check_mask(mask)
     if image2.shape[1:3] != mask.shape[1:3]:
-        raise ValueError(f"Inconsistent size: Image ({image2.shape[1:3]}) != Mask ({mask.shape[1:3]})")
+        mask = resize_mask(mask.squeeze(dim=3), image2.shape[1:3]).unsqueeze(dim=3)
+        # raise ValueError(f"Inconsistent size: Image ({image2.shape[1:3]}) != Mask ({mask.shape[1:3]})")
 
     x, y = left_top
     _, h1, w1, _ = image1.shape
@@ -475,6 +476,17 @@ def crop_ndarray4(npimg, crop_region):
 crop_tensor4 = crop_ndarray4
 
 
+def crop_ndarray3(npimg, crop_region):
+    x1 = crop_region[0]
+    y1 = crop_region[1]
+    x2 = crop_region[2]
+    y2 = crop_region[3]
+
+    cropped = npimg[:, y1:y2, x1:x2]
+
+    return cropped
+
+
 def crop_ndarray2(npimg, crop_region):
     x1 = crop_region[0]
     y1 = crop_region[1]
@@ -497,12 +509,6 @@ def to_latent_image(pixels, vae):
         pixels = pixels[:, :x, :y, :]
 
     vae_encode = nodes.VAEEncode()
-    if hasattr(nodes.VAEEncode, "vae_encode_crop_pixels"):
-        # backward compatibility
-        print(f"[Impact Pack] ComfyUI is outdated.")
-        pixels = nodes.VAEEncode.vae_encode_crop_pixels(pixels)
-        t = vae.encode(pixels[:, :, :, :3])
-        return {"samples": t}
 
     return vae_encode.encode(vae, pixels)[0]
 

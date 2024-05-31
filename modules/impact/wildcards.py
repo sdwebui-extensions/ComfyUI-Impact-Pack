@@ -7,8 +7,12 @@ import yaml
 import numpy as np
 import threading
 from impact import utils
+from impact import config
 
 
+wildcards_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "wildcards"))
+
+RE_WildCardQuantifier = re.compile(r"(?P<quantifier>\d+)#__(?P<keyword>[\w.\-+/*\\]+)__", re.IGNORECASE)
 wildcard_lock = threading.Lock()
 wildcard_dict = {}
 
@@ -67,7 +71,30 @@ def read_wildcard_dict(wildcard_path):
     return wildcard_dict
 
 
+def process_comment_out(text):
+    lines = text.split('\n')
+
+    lines0 = []
+    flag = False
+    for line in lines:
+        if line.lstrip().startswith('#'):
+            flag = True
+            continue
+
+        if len(lines0) == 0:
+            lines0.append(line)
+        elif flag:
+            lines0[-1] += ' ' + line
+            flag = False
+        else:
+            lines0.append(line)
+
+    return '\n'.join(lines0)
+
+
 def process(text, seed=None):
+    text = process_comment_out(text)
+
     if seed is not None:
         random.seed(seed)
     random_gen = np.random.default_rng(seed)
@@ -170,7 +197,7 @@ def process(text, seed=None):
                 replacements_found = True
                 string = string.replace(f"__{match}__", replacement, 1)
             elif '*' in keyword:
-                subpattern = keyword.replace('*', '.*').replace('+','\+')
+                subpattern = keyword.replace('*', '.*').replace('+','\\+')
                 total_patterns = []
                 found = False
                 for k, v in local_wildcard_dict.items():
@@ -192,6 +219,15 @@ def process(text, seed=None):
     stop_unwrap = False
     while not stop_unwrap and replace_depth > 1:
         replace_depth -= 1  # prevent infinite loop
+        
+        option_quantifier = [e.groupdict() for e in RE_WildCardQuantifier.finditer(text)]
+        for match in option_quantifier:
+            keyword = match['keyword'].lower()
+            quantifier = int(match['quantifier']) if match['quantifier'] else 1
+            replacement = '__|__'.join([keyword,] * quantifier)
+            wilder_keyword = keyword.replace('*', '\\*')
+            RE_TEMP = re.compile(fr"(?P<quantifier>\d+)#__(?P<keyword>{wilder_keyword})__", re.IGNORECASE)
+            text = RE_TEMP.sub(f"__{replacement}__", text)
 
         # pass1: replace options
         pass1, is_replaced1 = replace_options(text)
@@ -287,10 +323,22 @@ def resolve_lora_name(lora_name_cache, name):
                 return x
 
 
-def process_with_loras(wildcard_opt, model, clip, clip_encoder=None):
+def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, processed=None):
+    """
+    process wildcard text including loras
+
+    :param wildcard_opt: wildcard text
+    :param model: model
+    :param clip: clip
+    :param clip_encoder: you can pass custom encoder such as adv_cliptext_encode
+    :param seed: seed for populating
+    :param processed: output variable - [pass1, pass2, pass3] will be saved into passed list
+    :return: model, clip, conditioning
+    """
+
     lora_name_cache = []
 
-    pass1 = process(wildcard_opt)
+    pass1 = process(wildcard_opt, seed)
     loras = extract_lora_values(pass1)
     pass2 = remove_lora_tags(pass1)
 
@@ -350,6 +398,11 @@ def process_with_loras(wildcard_opt, model, clip, clip_encoder=None):
             result = nodes.ConditioningConcat().concat(result, cur)[0]
         else:
             result = cur
+
+    if processed is not None:
+        processed.append(pass1)
+        processed.append(pass2)
+        processed.append(pass3)
 
     return model, clip, result
 
@@ -450,3 +503,18 @@ def process_wildcard_for_segs(wildcard):
 
     else:
         return None, WildcardChooser([(None, wildcard)], False)
+
+
+def wildcard_load():
+    global wildcard_dict
+    wildcard_dict = {}
+
+    with wildcard_lock:
+        read_wildcard_dict(wildcards_path)
+
+        try:
+            read_wildcard_dict(config.get_config()['custom_wildcards'])
+        except Exception as e:
+            print(f"[Impact Pack] Failed to load custom wildcards directory.")
+
+        print(f"[Impact Pack] Wildcards loading done.")

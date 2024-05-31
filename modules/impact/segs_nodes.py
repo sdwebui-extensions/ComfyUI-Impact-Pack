@@ -12,6 +12,7 @@ from . import defs
 from . import segs_upscaler
 import math
 
+
 class SEGSDetailer:
     @classmethod
     def INPUT_TYPES(s):
@@ -25,7 +26,7 @@ class SEGSDetailer:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                     "scheduler": (core.SCHEDULERS,),
                      "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
                      "noise_mask": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
                      "force_inpaint": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
@@ -84,9 +85,25 @@ class SEGSDetailer:
                 else:
                     cropped_mask = None
 
+                cropped_positive = [
+                    [condition, {
+                        k: core.crop_condition_mask(v, image, seg.crop_region) if k == "mask" else v
+                        for k, v in details.items()
+                    }]
+                    for condition, details in positive
+                ]
+
+                cropped_negative = [
+                    [condition, {
+                        k: core.crop_condition_mask(v, image, seg.crop_region) if k == "mask" else v
+                        for k, v in details.items()
+                    }]
+                    for condition, details in negative
+                ]
+
                 enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for, max_size,
                                                                 seg.bbox, seed, steps, cfg, sampler_name, scheduler,
-                                                                positive, negative, denoise, cropped_mask, force_inpaint,
+                                                                cropped_positive, cropped_negative, denoise, cropped_mask, force_inpaint,
                                                                 refiner_ratio=refiner_ratio, refiner_model=refiner_model,
                                                                 refiner_clip=refiner_clip, refiner_positive=refiner_positive, refiner_negative=refiner_negative,
                                                                 control_net_wrapper=seg.control_net_wrapper, cycle=cycle,
@@ -1124,10 +1141,11 @@ class MaskToSEGS:
 
     CATEGORY = "ImpactPack/Operation"
 
-    def doit(self, mask, combined, crop_factor, bbox_fill, drop_size, contour_fill=False):
+    @staticmethod
+    def doit(mask, combined, crop_factor, bbox_fill, drop_size, contour_fill=False):
         mask = make_2d_mask(mask)
-
         result = core.mask_to_segs(mask, combined, crop_factor, bbox_fill, drop_size, is_contour=contour_fill)
+
         return (result, )
 
 
@@ -1149,11 +1167,17 @@ class MaskToSEGS_for_AnimateDiff:
 
     CATEGORY = "ImpactPack/Operation"
 
-    def doit(self, mask, combined, crop_factor, bbox_fill, drop_size, contour_fill=False):
+    @staticmethod
+    def doit(mask, combined, crop_factor, bbox_fill, drop_size, contour_fill=False):
+        if (len(mask.shape) == 4 and mask.shape[1] > 1) or (len(mask.shape) == 3 and mask.shape[0] > 1):
+            mask = make_3d_mask(mask)
+            if contour_fill:
+                print(f"[Impact Pack] MaskToSEGS_for_AnimateDiff: 'contour_fill' is ignored because batch mask 'contour_fill' is not supported.")
+            result = core.batch_mask_to_segs(mask, combined, crop_factor, bbox_fill, drop_size)
+            return (result, )
+
         mask = make_2d_mask(mask)
-
         segs = core.mask_to_segs(mask, combined, crop_factor, bbox_fill, drop_size, is_contour=contour_fill)
-
         all_masks = SEGSToMaskList().doit(segs)[0]
 
         result_mask = (all_masks[0] * 255).to(torch.uint8)
@@ -1163,7 +1187,7 @@ class MaskToSEGS_for_AnimateDiff:
         result_mask = (result_mask/255.0).to(torch.float32)
         result_mask = utils.to_binary_mask(result_mask, 0.1)[0]
 
-        return MaskToSEGS().doit(result_mask, False, crop_factor, False, drop_size, contour_fill)
+        return MaskToSEGS.doit(result_mask, False, crop_factor, False, drop_size, contour_fill)
 
 
 class IPAdapterApplySEGS:
@@ -1182,7 +1206,11 @@ class IPAdapterApplySEGS:
                     "weight_v2": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
                     "context_crop_factor": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 100, "step": 0.1}),
                     "reference_image": ("IMAGE",),
-                    }
+                    },
+                "optional": {
+                    "combine_embeds": (["concat", "add", "subtract", "average", "norm average"],),
+                    "neg_image": ("IMAGE",),
+                    },
                 }
 
     RETURN_TYPES = ("SEGS",)
@@ -1190,7 +1218,8 @@ class IPAdapterApplySEGS:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, segs, ipadapter_pipe, weight, noise, weight_type, start_at, end_at, unfold_batch, faceid_v2, weight_v2, context_crop_factor, reference_image):
+    @staticmethod
+    def doit(segs, ipadapter_pipe, weight, noise, weight_type, start_at, end_at, unfold_batch, faceid_v2, weight_v2, context_crop_factor, reference_image, combine_embeds="concat", neg_image=None):
 
         if len(ipadapter_pipe) == 4:
             print(f"[Impact Pack] IPAdapterApplySEGS: Installed Inspire Pack is outdated.")
@@ -1208,7 +1237,7 @@ class IPAdapterApplySEGS:
             context_crop_region = make_crop_region(w, h, seg.crop_region, context_crop_factor)
             cropped_image = crop_image(reference_image, context_crop_region)
 
-            control_net_wrapper = core.IPAdapterWrapper(ipadapter_pipe, weight, noise, weight_type, start_at, end_at, unfold_batch, faceid_v2, weight_v2, cropped_image, prev_control_net=seg.control_net_wrapper)
+            control_net_wrapper = core.IPAdapterWrapper(ipadapter_pipe, weight, noise, weight_type, start_at, end_at, unfold_batch, weight_v2, cropped_image, neg_image=neg_image, prev_control_net=seg.control_net_wrapper, combine_embeds=combine_embeds)
             new_seg = SEG(seg.cropped_image, seg.cropped_mask, seg.confidence, seg.crop_region, seg.bbox, seg.label, control_net_wrapper)
             new_segs.append(new_seg)
 
@@ -1234,7 +1263,8 @@ class ControlNetApplySEGS:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, segs, control_net, strength, segs_preprocessor=None, control_image=None):
+    @staticmethod
+    def doit(segs, control_net, strength, segs_preprocessor=None, control_image=None):
         new_segs = []
 
         for seg in segs[1]:
@@ -1267,7 +1297,8 @@ class ControlNetApplyAdvancedSEGS:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, segs, control_net, strength, start_percent, end_percent, segs_preprocessor=None, control_image=None):
+    @staticmethod
+    def doit(segs, control_net, strength, start_percent, end_percent, segs_preprocessor=None, control_image=None):
         new_segs = []
 
         for seg in segs[1]:
@@ -1290,7 +1321,8 @@ class ControlNetClearSEGS:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, segs):
+    @staticmethod
+    def doit(segs):
         new_segs = []
 
         for seg in segs[1]:
@@ -1348,7 +1380,8 @@ class SEGSPicker:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, picks, segs, fallback_image_opt=None, unique_id=None):
+    @staticmethod
+    def doit(picks, segs, fallback_image_opt=None, unique_id=None):
         if fallback_image_opt is not None:
             segs = core.segs_scale_match(segs, fallback_image_opt.shape)
 
@@ -1363,7 +1396,7 @@ class SEGSPicker:
             else:
                 cropped_image = empty_pil_tensor()
 
-            mask_array = seg.cropped_mask
+            mask_array = seg.cropped_mask.copy()
             mask_array[mask_array < 0.3] = 0.3
             mask_array = mask_array[None, ..., None]
             cropped_image = cropped_image * mask_array
@@ -1403,7 +1436,8 @@ class DefaultImageForSEGS:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, segs, image, override):
+    @staticmethod
+    def doit(segs, image, override):
         results = []
 
         segs = core.segs_scale_match(segs, image.shape)
@@ -1447,7 +1481,8 @@ class RemoveImageFromSEGS:
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, segs):
+    @staticmethod
+    def doit(segs):
         results = []
 
         if len(segs[1]) > 0:
@@ -1484,7 +1519,8 @@ class MakeTileSEGS:
 
     CATEGORY = "ImpactPack/__for_testing"
 
-    def doit(self, images, bbox_size, crop_factor, min_overlap, filter_segs_dilation, mask_irregularity=0, irregular_mask_mode="Reuse fast", filter_in_segs_opt=None, filter_out_segs_opt=None):
+    @staticmethod
+    def doit(images, bbox_size, crop_factor, min_overlap, filter_segs_dilation, mask_irregularity=0, irregular_mask_mode="Reuse fast", filter_in_segs_opt=None, filter_out_segs_opt=None):
         if bbox_size <= 2*min_overlap:
             new_min_overlap = bbox_size / 2
             print(f"[MakeTileSEGS] min_overlap should be greater than bbox_size. (value changed: {min_overlap} => {new_min_overlap})")
@@ -1668,7 +1704,7 @@ class SEGSUpscaler:
                     "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                     "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                     "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                    "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                    "scheduler": (core.SCHEDULERS,),
                     "positive": ("CONDITIONING",),
                     "negative": ("CONDITIONING",),
                     "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
@@ -1725,7 +1761,7 @@ class SEGSUpscaler:
                 tensor_paste(new_image, enhanced_image, (left, top), mask)
 
                 if upscaler_hook_opt is not None:
-                    upscaler_hook_opt.post_paste(new_image)
+                    new_image = upscaler_hook_opt.post_paste(new_image)
 
         enhanced_img = tensor_convert_rgb(new_image)
 
@@ -1749,7 +1785,7 @@ class SEGSUpscalerPipe:
                     "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                     "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                     "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                    "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                    "scheduler": (core.SCHEDULERS,),
                     "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
                     "feather": ("INT", {"default": 5, "min": 0, "max": 100, "step": 1}),
                     "inpaint_model": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),

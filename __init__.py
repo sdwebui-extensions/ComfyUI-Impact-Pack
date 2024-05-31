@@ -15,8 +15,6 @@ comfy_path = os.path.dirname(folder_paths.__file__)
 impact_path = os.path.join(os.path.dirname(__file__))
 subpack_path = os.path.join(os.path.dirname(__file__), "impact_subpack")
 modules_path = os.path.join(os.path.dirname(__file__), "modules")
-wildcards_path = os.path.join(os.path.dirname(__file__), "wildcards")
-custom_wildcards_path = os.path.join(os.path.dirname(__file__), "custom_wildcards")
 
 sys.path.append(modules_path)
 
@@ -51,6 +49,7 @@ try:
     import folder_paths
     import torch
     import cv2
+    from cv2 import setNumThreads
     import numpy as np
     import comfy.samplers
     import comfy.sd
@@ -69,32 +68,8 @@ except:
     print("### ComfyUI-Impact-Pack: Reinstall dependencies (several dependencies are missing.)")
     do_install()
 
+
 import impact.impact_server  # to load server api
-
-def setup_js():
-    import nodes
-    js_dest_path = os.path.join(comfy_path, "web", "extensions", "impact-pack")
-
-    if hasattr(nodes, "EXTENSION_WEB_DIRS"):
-        if os.path.exists(js_dest_path):
-            shutil.rmtree(js_dest_path)
-    else:
-        print(f"[WARN] ComfyUI-Impact-Pack: Your ComfyUI version is outdated. Please update to the latest version.")
-        # setup js
-        if not os.path.exists(js_dest_path):
-            os.makedirs(js_dest_path)
-
-        js_src_path = os.path.join(impact_path, "js", "impact-pack.js")
-        shutil.copy(js_src_path, js_dest_path)
-
-        js_src_path = os.path.join(impact_path, "js", "impact-sam-editor.js")
-        shutil.copy(js_src_path, js_dest_path)
-
-        js_src_path = os.path.join(impact_path, "js", "comboBoolMigration.js")
-        shutil.copy(js_src_path, js_dest_path)
-
-
-setup_js()
 
 from .modules.impact.impact_pack import *
 from .modules.impact.detectors import *
@@ -111,22 +86,8 @@ from .modules.impact.segs_upscaler import *
 
 import threading
 
-wildcard_path = impact.config.get_config()['custom_wildcards']
 
-
-def wildcard_load():
-    with wildcards.wildcard_lock:
-        impact.wildcards.read_wildcard_dict(wildcards_path)
-
-        try:
-            impact.wildcards.read_wildcard_dict(impact.config.get_config()['custom_wildcards'])
-        except Exception as e:
-            print(f"[Impact Pack] Failed to load custom wildcards directory.")
-
-        print(f"[Impact Pack] Wildcards loading done.")
-
-
-threading.Thread(target=wildcard_load).start()
+threading.Thread(target=impact.wildcards.wildcard_load).start()
 
 
 NODE_CLASS_MAPPINGS = {
@@ -191,6 +152,8 @@ NODE_CLASS_MAPPINGS = {
     "SEGSOrderedFilterDetailerHookProvider": SEGSOrderedFilterDetailerHookProvider,
     "SEGSRangeFilterDetailerHookProvider": SEGSRangeFilterDetailerHookProvider,
     "SEGSLabelFilterDetailerHookProvider": SEGSLabelFilterDetailerHookProvider,
+    "VariationNoiseDetailerHookProvider": VariationNoiseDetailerHookProvider,
+    # "CustomNoiseDetailerHookProvider": CustomNoiseDetailerHookProvider,
 
     "BitwiseAndMask": BitwiseAndMask,
     "SubtractMask": SubtractMask,
@@ -313,6 +276,8 @@ NODE_CLASS_MAPPINGS = {
     "ImpactNeg": ImpactNeg,
     "ImpactConditionalStopIteration": ImpactConditionalStopIteration,
     "ImpactStringSelector": StringSelector,
+    "StringListToString": StringListToString,
+    "WildcardPromptFromString": WildcardPromptFromString,
 
     "RemoveNoiseMask": RemoveNoiseMask,
 
@@ -330,7 +295,9 @@ NODE_CLASS_MAPPINGS = {
     "ImpactRemoteInt": ImpactRemoteInt,
 
     "ImpactHFTransformersClassifierProvider": HF_TransformersClassifierProvider,
-    "ImpactSEGSClassify": SEGS_Classify
+    "ImpactSEGSClassify": SEGS_Classify,
+
+    "ImpactSchedulerAdapter": ImpactSchedulerAdapter
 }
 
 
@@ -433,6 +400,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactMakeImageList": "Make Image List",
     "ImpactMakeImageBatch": "Make Image Batch",
     "ImpactStringSelector": "String Selector",
+    "StringListToString": "String List to String",
+    "WildcardPromptFromString": "Wildcard Prompt from String",
     "ImpactIsNotEmptySEGS": "SEGS isn't Empty",
     "SetDefaultImageForSEGS": "Set Default Image for SEGS",
     "RemoveImageFromSEGS": "Remove Image from SEGS",
@@ -457,7 +426,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LatentSwitch": "Switch (latent/legacy)",
     "SEGSSwitch": "Switch (SEGS/legacy)",
 
-    "SEGSPreviewCNet": "SEGSPreview (CNET Image)"
+    "SEGSPreviewCNet": "SEGSPreview (CNET Image)",
+
+    "ImpactSchedulerAdapter": "Impact Scheduler Adapter",
 }
 
 if not impact.config.get_config()['mmdet_skip']:

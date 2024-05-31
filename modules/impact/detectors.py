@@ -151,7 +151,11 @@ class SegmDetectorCombined:
 
     def doit(self, segm_detector, image, threshold, dilation):
         mask = segm_detector.detect_combined(image, threshold, dilation)
-        return (mask,)
+
+        if mask is None:
+            mask = torch.zeros((image.shape[2], image.shape[1]), dtype=torch.float32, device="cpu")
+
+        return (mask.unsqueeze(0),)
 
 
 class BboxDetectorCombined(SegmDetectorCombined):
@@ -167,7 +171,11 @@ class BboxDetectorCombined(SegmDetectorCombined):
 
     def doit(self, bbox_detector, image, threshold, dilation):
         mask = bbox_detector.detect_combined(image, threshold, dilation)
-        return (mask,)
+
+        if mask is None:
+            mask = torch.zeros((image.shape[2], image.shape[1]), dtype=torch.float32, device="cpu")
+
+        return (mask.unsqueeze(0),)
 
 
 class SimpleDetectorForEach:
@@ -402,7 +410,7 @@ class SimpleDetectorForAnimateDiff:
                 return segs_by_frames[0][1]
             else:
                 merged_mask = get_whole_merged_mask()
-                return segs_nodes.MaskToSEGS().doit(merged_mask, False, crop_factor, False, drop_size, contour_fill=True)[0]
+                return segs_nodes.MaskToSEGS.doit(merged_mask, False, crop_factor, False, drop_size, contour_fill=True)[0]
 
         def get_merged_neighboring_segs():
             pivot_segs = get_pivot_segs()

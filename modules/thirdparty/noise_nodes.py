@@ -5,6 +5,9 @@
 import comfy
 import torch
 
+from comfy import sampler_helpers
+
+
 class Unsampler:
     @classmethod
     def INPUT_TYPES(s):
@@ -39,25 +42,27 @@ class Unsampler:
         noise = torch.zeros(latent_image.size(), dtype=latent_image.dtype, layout=latent_image.layout, device="cpu")
         noise_mask = None
         if "noise_mask" in latent:
-            noise_mask = comfy.sample.prepare_mask(latent["noise_mask"], noise.shape, device)
-
-        real_model = None
-        real_model = model.model
+            noise_mask = comfy.sampler_helpers.prepare_mask(latent["noise_mask"], noise.shape, device)
 
         noise = noise.to(device)
         latent_image = latent_image.to(device)
 
-        positive = comfy.sample.convert_cond(positive)
-        negative = comfy.sample.convert_cond(negative)
+        conds0 = \
+            {"positive": comfy.sampler_helpers.convert_cond(positive),
+             "negative": comfy.sampler_helpers.convert_cond(negative)}
 
-        models, inference_memory = comfy.sample.get_additional_models(positive, negative, model.model_dtype())
+        conds = {}
+        for k in conds0:
+            conds[k] = list(map(lambda a: a.copy(), conds0[k]))
+
+        models, inference_memory = comfy.sampler_helpers.get_additional_models(conds, model.model_dtype())
 
         comfy.model_management.load_models_gpu([model] + models, model.memory_required(noise.shape) + inference_memory)
 
-        sampler = comfy.samplers.KSampler(real_model, steps=steps, device=device, sampler=sampler_name,
+        sampler = comfy.samplers.KSampler(model, steps=steps, device=device, sampler=sampler_name,
                                           scheduler=scheduler, denoise=1.0, model_options=model.model_options)
 
-        sigmas = sigmas = sampler.sigmas.flip(0) + 0.0001
+        sigmas = sampler.sigmas.flip(0) + 0.0001
 
         pbar = comfy.utils.ProgressBar(steps)
 
@@ -73,8 +78,9 @@ class Unsampler:
             samples /= samples.std()
         samples = samples.cpu()
 
-        comfy.sample.cleanup_additional_models(models)
+        comfy.sampler_helpers.cleanup_additional_models(models)
 
         out = latent.copy()
         out["samples"] = samples
         return (out,)
+
