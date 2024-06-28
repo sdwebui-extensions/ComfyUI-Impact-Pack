@@ -10,7 +10,13 @@ from impact import utils
 from impact import config
 
 
-wildcards_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "wildcards"))
+# wildcards_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "wildcards"))
+wildcards_path = os.path.join(folder_paths.models_dir, 'wildcards')
+if not os.path.exists(wildcards_path):
+    try:
+        os.makedirs(wildcards_path, exist_ok=True)
+    except:
+        pass
 
 RE_WildCardQuantifier = re.compile(r"(?P<quantifier>\d+)#__(?P<keyword>[\w.\-+/*\\]+)__", re.IGNORECASE)
 wildcard_lock = threading.Lock()
@@ -41,6 +47,9 @@ def read_wildcard(k, v):
             new_key = f"{k}/{k2}"
             new_key = wildcard_normalize(new_key)
             read_wildcard(new_key, v2)
+    elif isinstance(v, str):
+        k = wildcard_normalize(k)
+        wildcard_dict[k] = [v]
 
 
 def read_wildcard_dict(wildcard_path):
@@ -197,11 +206,11 @@ def process(text, seed=None):
                 replacements_found = True
                 string = string.replace(f"__{match}__", replacement, 1)
             elif '*' in keyword:
-                subpattern = keyword.replace('*', '.*').replace('+','\\+')
+                subpattern = keyword.replace('*', '.*').replace('+', '\\+')
                 total_patterns = []
                 found = False
                 for k, v in local_wildcard_dict.items():
-                    if re.match(subpattern, k) is not None:
+                    if re.match(subpattern, k) is not None or re.match(subpattern, k+'/') is not None:
                         total_patterns += v
                         found = True
 

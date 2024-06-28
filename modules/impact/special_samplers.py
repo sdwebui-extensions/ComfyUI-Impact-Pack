@@ -1,5 +1,6 @@
 import math
 import impact.core as core
+from comfy_extras.nodes_custom_sampler import Noise_RandomNoise
 from impact.utils import *
 from nodes import MAX_RESOLUTION
 import nodes
@@ -22,12 +23,29 @@ class TiledKSamplerProvider:
                     "basic_pipe": ("BASIC_PIPE", )
                     }}
 
+    TOOLTIPS = {
+        "input": {
+            "seed": "Random seed to use for generating CPU noise for sampling.",
+            "steps": "total sampling steps",
+            "cfg": "classifier free guidance value",
+            "sampler_name": "sampler",
+            "scheduler": "noise schedule",
+            "denoise": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned.",
+            "tile_width": "Sets the width of the tile to be used in TiledKSampler.",
+            "tile_height": "Sets the height of the tile to be used in TiledKSampler.",
+            "tiling_strategy": "Sets the tiling strategy for TiledKSampler.",
+            "basic_pipe": "basic_pipe input for sampling",
+        },
+        "output": ("sampler wrapper. (Can be used when generating a regional_prompt.)", )
+    }
+
     RETURN_TYPES = ("KSAMPLER",)
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Sampler"
 
-    def doit(self, seed, steps, cfg, sampler_name, scheduler, denoise,
+    @staticmethod
+    def doit(seed, steps, cfg, sampler_name, scheduler, denoise,
              tile_width, tile_height, tiling_strategy, basic_pipe):
         model, _, _, positive, negative = basic_pipe
         sampler = core.TiledKSamplerWrapper(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise,
@@ -47,16 +65,34 @@ class KSamplerProvider:
                                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                                 "basic_pipe": ("BASIC_PIPE", )
                              },
+                "optional": {
+                    "scheduler_func_opt": ("SCHEDULER_FUNC",),
+                    }
                 }
+
+    TOOLTIPS = {
+        "input": {
+            "seed": "Random seed to use for generating CPU noise for sampling.",
+            "steps": "total sampling steps",
+            "cfg": "classifier free guidance value",
+            "sampler_name": "sampler",
+            "scheduler": "noise schedule",
+            "denoise": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned.",
+            "basic_pipe": "basic_pipe input for sampling",
+            "scheduler_func_opt": "[OPTIONAL] Noise schedule generation function. If this is set, the scheduler widget will be ignored.",
+        },
+        "output": ("sampler wrapper. (Can be used when generating a regional_prompt.)", )
+    }
 
     RETURN_TYPES = ("KSAMPLER",)
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Sampler"
 
-    def doit(self, seed, steps, cfg, sampler_name, scheduler, denoise, basic_pipe):
+    @staticmethod
+    def doit(seed, steps, cfg, sampler_name, scheduler, denoise, basic_pipe, scheduler_func_opt=None):
         model, _, _, positive, negative = basic_pipe
-        sampler = KSamplerWrapper(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise)
+        sampler = KSamplerWrapper(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise, scheduler_func=scheduler_func_opt)
         return (sampler, )
 
 
@@ -71,18 +107,33 @@ class KSamplerAdvancedProvider:
                                 "basic_pipe": ("BASIC_PIPE", )
                              },
                 "optional": {
-                                "sampler_opt": ("SAMPLER", )
+                                "sampler_opt": ("SAMPLER", ),
+                                "scheduler_func_opt": ("SCHEDULER_FUNC",),
                             }
                 }
+
+    TOOLTIPS = {
+        "input": {
+            "cfg": "classifier free guidance value",
+            "sampler_name": "sampler",
+            "scheduler": "noise schedule",
+            "sigma_factor": "Multiplier of noise schedule",
+            "basic_pipe": "basic_pipe input for sampling",
+            "sampler_opt": "[OPTIONAL] Uses the passed sampler instead of internal impact_sampler.",
+            "scheduler_func_opt": "[OPTIONAL] Noise schedule generation function. If this is set, the scheduler widget will be ignored.",
+        },
+        "output": ("sampler wrapper. (Can be used when generating a regional_prompt.)", )
+    }
 
     RETURN_TYPES = ("KSAMPLER_ADVANCED",)
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Sampler"
 
-    def doit(self, cfg, sampler_name, scheduler, basic_pipe, sigma_factor=1.0, sampler_opt=None):
+    @staticmethod
+    def doit(cfg, sampler_name, scheduler, basic_pipe, sigma_factor=1.0, sampler_opt=None, scheduler_func_opt=None):
         model, _, _, positive, negative = basic_pipe
-        sampler = KSamplerAdvancedWrapper(model, cfg, sampler_name, scheduler, positive, negative, sampler_opt=sampler_opt, sigma_factor=sigma_factor)
+        sampler = KSamplerAdvancedWrapper(model, cfg, sampler_name, scheduler, positive, negative, sampler_opt=sampler_opt, sigma_factor=sigma_factor, scheduler_func=scheduler_func_opt)
         return (sampler, )
 
 
@@ -97,12 +148,23 @@ class TwoSamplersForMask:
                      },
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "latent_image": "input latent image",
+            "base_sampler": "Sampler to apply to the region outside the mask.",
+            "mask_sampler": "Sampler to apply to the masked region.",
+            "mask": "region mask",
+        },
+        "output": ("result latent", )
+    }
+
     RETURN_TYPES = ("LATENT", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Sampler"
 
-    def doit(self, latent_image, base_sampler, mask_sampler, mask):
+    @staticmethod
+    def doit(latent_image, base_sampler, mask_sampler, mask):
         inv_mask = torch.where(mask != 1.0, torch.tensor(1.0), torch.tensor(0.0))
 
         latent_image['noise_mask'] = inv_mask
@@ -131,6 +193,20 @@ class TwoAdvancedSamplersForMask:
                      },
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "seed": "Random seed to use for generating CPU noise for sampling.",
+            "steps": "total sampling steps",
+            "denoise": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned.",
+            "samples": "input latent image",
+            "base_sampler": "Sampler to apply to the region outside the mask.",
+            "mask_sampler": "Sampler to apply to the masked region.",
+            "mask": "region mask",
+            "overlap_factor": "To smooth the seams of the region boundaries, expand the mask by the overlap_factor amount to overlap with other regions.",
+        },
+        "output": ("result latent", )
+    }
+
     RETURN_TYPES = ("LATENT", )
     FUNCTION = "doit"
 
@@ -154,7 +230,8 @@ class TwoAdvancedSamplersForMask:
 
         return mask_erosion[:, :, :w, :h].round()
 
-    def doit(self, seed, steps, denoise, samples, base_sampler, mask_sampler, mask, overlap_factor):
+    @staticmethod
+    def doit(seed, steps, denoise, samples, base_sampler, mask_sampler, mask, overlap_factor):
 
         inv_mask = torch.where(mask != 1.0, torch.tensor(1.0), torch.tensor(0.0))
 
@@ -184,18 +261,32 @@ class RegionalPrompt:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                     "mask": ("MASK", ),
-                     "advanced_sampler": ("KSAMPLER_ADVANCED", ),
-                     },
+                    "mask": ("MASK", ),
+                    "advanced_sampler": ("KSAMPLER_ADVANCED", ),
+                    },
+                "optional": {
+                    "variation_seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                    "variation_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                    "variation_method": (["linear", "slerp"],),
+                    }
                 }
+
+    TOOLTIPS = {
+        "input": {
+            "mask": "region mask",
+            "advanced_sampler": "sampler for specified region",
+        },
+        "output": ("regional prompts. (Can be used in the RegionalSampler.)", )
+    }
 
     RETURN_TYPES = ("REGIONAL_PROMPTS", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Regional"
 
-    def doit(self, mask, advanced_sampler):
-        regional_prompt = core.REGIONAL_PROMPT(mask, advanced_sampler)
+    @staticmethod
+    def doit(mask, advanced_sampler, variation_seed=0, variation_strength=0.0, variation_method="linear"):
+        regional_prompt = core.REGIONAL_PROMPT(mask, advanced_sampler, variation_seed=variation_seed, variation_strength=variation_strength, variation_method=variation_method)
         return ([regional_prompt], )
 
 
@@ -207,12 +298,20 @@ class CombineRegionalPrompts:
                      },
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "regional_prompts1": "input regional_prompts. (Connecting to the input slot increases the number of additional slots.)",
+        },
+        "output": ("Combined REGIONAL_PROMPTS", )
+    }
+
     RETURN_TYPES = ("REGIONAL_PROMPTS", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Regional"
 
-    def doit(self, **kwargs):
+    @staticmethod
+    def doit(**kwargs):
         res = []
         for k, v in kwargs.items():
             res += v
@@ -228,12 +327,20 @@ class CombineConditionings:
                      },
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "conditioning1": "input conditionings. (Connecting to the input slot increases the number of additional slots.)",
+        },
+        "output": ("Combined conditioning", )
+    }
+
     RETURN_TYPES = ("CONDITIONING", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, **kwargs):
+    @staticmethod
+    def doit(**kwargs):
         res = []
         for k, v in kwargs.items():
             res += v
@@ -249,12 +356,20 @@ class ConcatConditionings:
                      },
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "conditioning1": "input conditionings. (Connecting to the input slot increases the number of additional slots.)",
+        },
+        "output": ("Concatenated conditioning", )
+    }
+
     RETURN_TYPES = ("CONDITIONING", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, **kwargs):
+    @staticmethod
+    def doit(**kwargs):
         conditioning_to = list(kwargs.values())[0]
 
         for k, conditioning_from in list(kwargs.items())[1:]:
@@ -297,6 +412,26 @@ class RegionalSampler:
                  "hidden": {"unique_id": "UNIQUE_ID"},
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "seed": "Random seed to use for generating CPU noise for sampling.",
+            "seed_2nd": "Additional noise seed. The behavior is determined by seed_2nd_mode.",
+            "seed_2nd_mode": "application method of seed_2nd. 1) ignore: Do not use seed_2nd. In the base only sampling stage, the seed is applied as a noise seed, and in the regional sampling stage, denoising is performed as it is without additional noise. 2) Others: In the base only sampling stage, the seed is applied as a noise seed, and once it is closed so that there is no leftover noise, new noise is added with seed_2nd and the regional samping stage is performed. a) fixed: Use seed_2nd as it is as an additional noise seed. b) seed+seed_2nd: Apply the value of seed+seed_2nd as an additional noise seed. c) seed-seed_2nd: Apply the value of seed-seed_2nd as an additional noise seed. d) increment: Not implemented yet. Same with fixed. e) decrement: Not implemented yet. Same with fixed. f) randomize: Not implemented yet. Same with fixed.",
+            "steps": "total sampling steps",
+            "base_only_steps": "total sampling steps",
+            "denoise": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned.",
+            "samples": "input latent image",
+            "base_sampler": "The sampler applied outside the area set by the regional_prompt.",
+            "regional_prompts": "The prompt applied to each region",
+            "overlap_factor": "To smooth the seams of the region boundaries, expand the mask set in regional_prompts by the overlap_factor amount to overlap with other regions.",
+            "restore_latent": "At each step, restore the noise outside the mask area to its original state, as per the principle of inpainting. This option is provided for backward compatibility, and it is recommended to always set it to true.",
+            "additional_mode": "..._sde or uni_pc and other special samplers are used, the region is not properly denoised, and it causes a phenomenon that destroys the overall harmony. To compensate for this, a recovery operation is performed using another sampler. This requires a longer time for sampling because a second sampling is performed at each step in each region using a special sampler. 1) DISABLE: Disable this feature. 2) ratio additional: After performing the denoise amount to be performed in the step with the sampler set in the region, the recovery sampler is additionally applied by the additional_sigma_ratio. If you use this option, the total denoise amount increases by additional_sigma_ratio. 3) ratio between: The denoise amount to be performed in the step with the sampler set in the region and the denoise amount to be applied to the recovery sampler are divided by additional_sigma_ratio, and denoise is performed for each denoise amount. If you use this option, the total denoise amount does not change.",
+            "additional_sampler": "1) AUTO: Automatically set the recovery sampler. If the sampler is uni_pc, uni_pc_bh2, dpmpp_sde, dpmpp_sde_gpu, the dpm_fast sampler is selected If the sampler is dpmpp_2m_sde, dpmpp_2m_sde_gpu, dpmpp_3m_sde, dpmpp_3m_sde_gpu, the dpmpp_2m sampler is selected. 2) Others: Manually set the recovery sampler.",
+            "additional_sigma_ratio": "Multiplier of noise schedule to be applied according to additional_mode.",
+        },
+        "output": ("result latent", )
+    }
+
     RETURN_TYPES = ("LATENT", )
     FUNCTION = "doit"
 
@@ -324,7 +459,8 @@ class RegionalSampler:
 
         return mask_erosion[:, :, :w, :h].round()
 
-    def doit(self, seed, seed_2nd, seed_2nd_mode, steps, base_only_steps, denoise, samples, base_sampler, regional_prompts, overlap_factor, restore_latent,
+    @staticmethod
+    def doit(seed, seed_2nd, seed_2nd_mode, steps, base_only_steps, denoise, samples, base_sampler, regional_prompts, overlap_factor, restore_latent,
              additional_mode, additional_sampler, additional_sigma_ratio, unique_id=None):
         if restore_latent:
             latent_compositor = nodes.NODE_CLASS_MAPPINGS['LatentCompositeMasked']()
@@ -348,7 +484,12 @@ class RegionalSampler:
             if seed_2nd_mode == 'ignore':
                 leftover_noise = True
 
-            samples = base_sampler.sample_advanced(True, seed, adv_steps, samples, start_at_step, start_at_step + base_only_steps, leftover_noise, recovery_mode="DISABLE")
+            noise = Noise_RandomNoise(seed).generate_noise(samples)
+
+            for rp in regional_prompts:
+                noise = rp.touch_noise(noise)
+
+            samples = base_sampler.sample_advanced(True, seed, adv_steps, samples, start_at_step, start_at_step + base_only_steps, leftover_noise, recovery_mode="DISABLE", noise=noise)
 
         if seed_2nd_mode == "seed+seed_2nd":
             seed += seed_2nd
@@ -366,15 +507,20 @@ class RegionalSampler:
 
         if not leftover_noise:
             add_noise = True
+            noise = Noise_RandomNoise(seed).generate_noise(samples)
+
+            for rp in regional_prompts:
+                noise = rp.touch_noise(noise)
         else:
             add_noise = False
+            noise = None
 
         for i in range(start_at_step+base_only_steps, adv_steps):
             core.update_node_status(unique_id, f"{i}/{steps} steps  |         ", ((i-start_at_step)*region_len)/total)
 
             new_latent_image['noise_mask'] = inv_mask
             new_latent_image = base_sampler.sample_advanced(add_noise, seed, adv_steps, new_latent_image, i, i + 1, True,
-                                                            recovery_mode=additional_mode, recovery_sampler=additional_sampler, recovery_sigma_ratio=additional_sigma_ratio)
+                                                            recovery_mode=additional_mode, recovery_sampler=additional_sampler, recovery_sigma_ratio=additional_sigma_ratio, noise=noise)
 
             if restore_latent:
                 if 'noise_mask' in new_latent_image:
@@ -448,12 +594,34 @@ class RegionalSamplerAdvanced:
                  "hidden": {"unique_id": "UNIQUE_ID"},
                 }
 
+    TOOLTIPS = {
+        "input": {
+            "add_noise": "Whether to add noise",
+            "noise_seed": "Random seed to use for generating CPU noise for sampling.",
+            "steps": "total sampling steps",
+            "start_at_step": "The starting step of the sampling to be applied at this node within the range of 'steps'.",
+            "end_at_step": "The step at which sampling applied at this node will stop within the range of steps (if greater than steps, sampling will continue only up to steps).",
+            "overlap_factor": "To smooth the seams of the region boundaries, expand the mask set in regional_prompts by the overlap_factor amount to overlap with other regions.",
+            "restore_latent": "At each step, restore the noise outside the mask area to its original state, as per the principle of inpainting. This option is provided for backward compatibility, and it is recommended to always set it to true.",
+            "return_with_leftover_noise": "Whether to return the latent with noise remaining if the noise has not been completely removed according to the noise schedule, or to completely remove the noise before returning it.",
+            "latent_image": "input latent image",
+            "base_sampler": "The sampler applied outside the area set by the regional_prompt.",
+            "regional_prompts": "The prompt applied to each region",
+            "additional_mode": "..._sde or uni_pc and other special samplers are used, the region is not properly denoised, and it causes a phenomenon that destroys the overall harmony. To compensate for this, a recovery operation is performed using another sampler. This requires a longer time for sampling because a second sampling is performed at each step in each region using a special sampler. 1) DISABLE: Disable this feature. 2) ratio additional: After performing the denoise amount to be performed in the step with the sampler set in the region, the recovery sampler is additionally applied by the additional_sigma_ratio. If you use this option, the total denoise amount increases by additional_sigma_ratio. 3) ratio between: The denoise amount to be performed in the step with the sampler set in the region and the denoise amount to be applied to the recovery sampler are divided by additional_sigma_ratio, and denoise is performed for each denoise amount. If you use this option, the total denoise amount does not change.",
+            "additional_sampler": "1) AUTO: Automatically set the recovery sampler. If the sampler is uni_pc, uni_pc_bh2, dpmpp_sde, dpmpp_sde_gpu, the dpm_fast sampler is selected If the sampler is dpmpp_2m_sde, dpmpp_2m_sde_gpu, dpmpp_3m_sde, dpmpp_3m_sde_gpu, the dpmpp_2m sampler is selected. 2) Others: Manually set the recovery sampler.",
+            "additional_sigma_ratio": "Multiplier of noise schedule to be applied according to additional_mode.",
+        },
+        "output": ("result latent", )
+    }
+
+
     RETURN_TYPES = ("LATENT", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Regional"
 
-    def doit(self, add_noise, noise_seed, steps, start_at_step, end_at_step, overlap_factor, restore_latent, return_with_leftover_noise, latent_image, base_sampler, regional_prompts,
+    @staticmethod
+    def doit(add_noise, noise_seed, steps, start_at_step, end_at_step, overlap_factor, restore_latent, return_with_leftover_noise, latent_image, base_sampler, regional_prompts,
              additional_mode, additional_sampler, additional_sigma_ratio, unique_id):
 
         if restore_latent:
@@ -480,9 +648,16 @@ class RegionalSamplerAdvanced:
 
             cur_add_noise = True if i == start_at_step and add_noise else False
 
+            if cur_add_noise:
+                noise = Noise_RandomNoise(noise_seed).generate_noise(new_latent_image)
+                for rp in regional_prompts:
+                    noise = rp.touch_noise(noise)
+            else:
+                noise = None
+
             new_latent_image['noise_mask'] = inv_mask
             new_latent_image = base_sampler.sample_advanced(cur_add_noise, noise_seed, steps, new_latent_image, i, i + 1, True,
-                                                            recovery_mode=additional_mode, recovery_sampler=additional_sampler, recovery_sigma_ratio=additional_sigma_ratio)
+                                                            recovery_mode=additional_mode, recovery_sampler=additional_sampler, recovery_sigma_ratio=additional_sigma_ratio, noise=noise)
 
             if restore_latent:
                 del new_latent_image['noise_mask']
@@ -547,17 +722,37 @@ class KSamplerBasicPipe:
                      "scheduler": (core.SCHEDULERS, ),
                      "latent_image": ("LATENT", ),
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                     }
+                     },
+                "optional":
+                    {
+                        "scheduler_func_opt": ("SCHEDULER_FUNC", ),
+                    }
                 }
+
+    TOOLTIPS = {
+        "input": {
+            "basic_pipe": "basic_pipe input for sampling",
+            "seed": "Random seed to use for generating CPU noise for sampling.",
+            "steps": "total sampling steps",
+            "cfg": "classifier free guidance value",
+            "sampler_name": "sampler",
+            "scheduler": "noise schedule",
+            "latent_image": "input latent image",
+            "denoise": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned.",
+            "scheduler_func_opt": "[OPTIONAL] Noise schedule generation function. If this is set, the scheduler widget will be ignored.",
+        },
+        "output": ("passthrough input basic_pipe", "result latent", "VAE in basic_pipe")
+    }
 
     RETURN_TYPES = ("BASIC_PIPE", "LATENT", "VAE")
     FUNCTION = "sample"
 
-    CATEGORY = "sampling"
+    CATEGORY = "ImpactPack/sampling"
 
-    def sample(self, basic_pipe, seed, steps, cfg, sampler_name, scheduler, latent_image, denoise=1.0):
+    @staticmethod
+    def sample(basic_pipe, seed, steps, cfg, sampler_name, scheduler, latent_image, denoise=1.0, scheduler_func_opt=None):
         model, clip, vae, positive, negative = basic_pipe
-        latent = impact_sample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise)
+        latent = impact_sample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise, scheduler_func=scheduler_func_opt)
         return basic_pipe, latent, vae
 
 
@@ -576,17 +771,72 @@ class KSamplerAdvancedBasicPipe:
                      "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
                      "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
                      "return_with_leftover_noise": ("BOOLEAN", {"default": False, "label_on": "enable", "label_off": "disable"}),
-                     }
+                     },
+                "optional":
+                    {
+                        "scheduler_func_opt": ("SCHEDULER_FUNC", ),
+                    }
                 }
+
+    TOOLTIPS = {
+        "input": {
+            "basic_pipe": "basic_pipe input for sampling",
+            "add_noise": "Whether to add noise",
+            "noise_seed": "Random seed to use for generating CPU noise for sampling.",
+            "steps": "total sampling steps",
+            "cfg": "classifier free guidance value",
+            "sampler_name": "sampler",
+            "scheduler": "noise schedule",
+            "latent_image": "input latent image",
+            "start_at_step": "The starting step of the sampling to be applied at this node within the range of 'steps'.",
+            "end_at_step": "The step at which sampling applied at this node will stop within the range of steps (if greater than steps, sampling will continue only up to steps).",
+            "return_with_leftover_noise": "Whether to return the latent with noise remaining if the noise has not been completely removed according to the noise schedule, or to completely remove the noise before returning it.",
+            "scheduler_func_opt": "[OPTIONAL] Noise schedule generation function. If this is set, the scheduler widget will be ignored.",
+        },
+        "output": ("passthrough input basic_pipe", "result latent", "VAE in basic_pipe")
+    }
 
     RETURN_TYPES = ("BASIC_PIPE", "LATENT", "VAE")
     FUNCTION = "sample"
 
-    CATEGORY = "sampling"
+    CATEGORY = "ImpactPack/sampling"
 
-    def sample(self, basic_pipe, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, latent_image, start_at_step, end_at_step, return_with_leftover_noise, denoise=1.0):
+    @staticmethod
+    def sample(basic_pipe, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, latent_image, start_at_step, end_at_step, return_with_leftover_noise, denoise=1.0, scheduler_func_opt=None):
         model, clip, vae, positive, negative = basic_pipe
 
-        latent = separated_sample(model, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise)
+        latent = separated_sample(model, add_noise, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, return_with_leftover_noise, scheduler_func=scheduler_func_opt)
         return basic_pipe, latent, vae
 
+
+class GITSSchedulerFuncProvider:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                        "coeff": ("FLOAT", {"default": 1.20, "min": 0.80, "max": 1.50, "step": 0.05}),
+                        "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                    }
+                }
+
+    TOOLTIPS = {
+        "input": {
+            "coeff": "coeff factor of GITS Scheduler",
+            "denoise": "denoise amount for noise schedule",
+        },
+        "output": ("Returns a function that generates a noise schedule using GITSScheduler. This can be used in place of a predetermined noise schedule to dynamically generate a noise schedule based on the steps.",)
+    }
+
+    RETURN_TYPES = ("SCHEDULER_FUNC",)
+    CATEGORY = "ImpactPack/sampling"
+
+    FUNCTION = "doit"
+
+    def doit(self, coeff, denoise):
+        def f(model, sampler, steps):
+            if 'GITSScheduler' not in nodes.NODE_CLASS_MAPPINGS:
+                raise Exception("[Impact Pack] ComfyUI is an outdated version. Cannot use GITSScheduler.")
+
+            scheduler = nodes.NODE_CLASS_MAPPINGS['GITSScheduler']()
+            return scheduler.get_sigmas(coeff, steps, denoise)[0]
+
+        return (f, )

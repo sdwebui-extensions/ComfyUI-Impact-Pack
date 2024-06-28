@@ -6,6 +6,7 @@ import comfy
 import sys
 import nodes
 import re
+from server import PromptServer
 
 
 class GeneralSwitch:
@@ -196,8 +197,9 @@ class ImpactLogger:
     def INPUT_TYPES(s):
         return {"required": {
                         "data": (any_typ, ""),
+                        "text": ("STRING", {"multiline": True}),
                     },
-                "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+                "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
                 }
 
     CATEGORY = "ImpactPack/Debug"
@@ -207,7 +209,7 @@ class ImpactLogger:
     RETURN_TYPES = ()
     FUNCTION = "doit"
 
-    def doit(self, data, prompt, extra_pnginfo):
+    def doit(self, data, text, prompt, extra_pnginfo, unique_id):
         shape = ""
         if hasattr(data, "shape"):
             shape = f"{data.shape} / "
@@ -218,12 +220,13 @@ class ImpactLogger:
 
         # for x in prompt:
         #     if 'inputs' in x and 'populated_text' in x['inputs']:
-        #         print(f"PROMP: {x['10']['inputs']['populated_text']}")
+        #         print(f"PROMPT: {x['10']['inputs']['populated_text']}")
         #
         # for x in extra_pnginfo['workflow']['nodes']:
         #     if x['type'] == 'ImpactWildcardProcessor':
         #         print(f" WV : {x['widgets_values'][1]}\n")
 
+        PromptServer.instance.send_sync("impact-node-feedback", {"node_id": unique_id, "widget_name": "text", "type": "TEXT", "value": f"{data}"})
         return {}
 
 
@@ -544,14 +547,17 @@ class WildcardPromptFromString:
             delimiter = "\n"
 
         # some sanity checks and normalization for later processing
-        if prefix_all is None: prefix_all = ""
-        if postfix_all is None: postfix_all = ""
-        if restrict_to_tags is None: restrict_to_tags = ""
-        if exclude_tags is None: exclude_tags = ""
-        if not isinstance(restrict_to_tags, list):
-            restrict_to_tags = restrict_to_tags.split(", ")
-        if not isinstance(exclude_tags, list):
-            exclude_tags = exclude_tags.split(", ")
+        if prefix_all is None:
+            prefix_all = ""
+        if postfix_all is None:
+            postfix_all = ""
+        if restrict_to_tags is None:
+            restrict_to_tags = ""
+        if exclude_tags is None:
+            exclude_tags = ""
+
+        restrict_to_tags = restrict_to_tags.split(", ")
+        exclude_tags = exclude_tags.split(", ")
 
         # build the wildcard prompt per list entry
         output = ["[LAB]"]
@@ -561,10 +567,10 @@ class WildcardPromptFromString:
             labels.append(label)
             x = x.split(", ")
             # restrict to tags
-            if restrict_to_tags != "":
+            if restrict_to_tags != [""]:
                 x = list(set(x) & set(restrict_to_tags))
             # remove tags
-            if exclude_tags != "":
+            if exclude_tags != [""]:
                 x = list(set(x) - set(exclude_tags))
             # next row: <LABEL> <PREFIX> <TAGS> <POSTFIX>
             prompt_for_seg = f'[{label}] {prefix_all} {", ".join(x)} {postfix_all}'.strip()
@@ -577,4 +583,4 @@ class WildcardPromptFromString:
         output = re.sub(r',,+', ',', output)
         output = re.sub(r'\n, ', '\n', output)
 
-        return (output, ", ".join(labels),)
+        return output, ", ".join(labels)

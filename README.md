@@ -53,14 +53,14 @@ This custom node helps to conveniently enhance images through Detector, Detailer
   * `IPAdapterApply (SEGS)` - To apply IPAdapter in SEGS, you need to use the Preprocessor Provider node from the Inspire Pack to utilize this node.
 
 ### Mask operation
-  * `Bitwise(SEGS & SEGS)` - Performs a 'bitwise and' operation between two SEGS.
-  * `Bitwise(SEGS - SEGS)` - Subtracts one SEGS from another.
-  * `Bitwise(SEGS & MASK)` - Performs a bitwise AND operation between SEGS and MASK.
-  * `Bitwise(SEGS & MASKS ForEach)` - Performs a bitwise AND operation between SEGS and MASKS.
+  * `Pixelwise(SEGS & SEGS)` - Performs a 'pixelwise and' operation between two SEGS.
+  * `Pixelwise(SEGS - SEGS)` - Subtracts one SEGS from another.
+  * `Pixelwise(SEGS & MASK)` - Performs a pixelwise AND operation between SEGS and MASK.
+  * `Pixelwise(SEGS & MASKS ForEach)` - Performs a pixelwise AND operation between SEGS and MASKS.
     * Please note that this operation is performed with batches of MASKS, not just a single MASK.
-  * `Bitwise(MASK & MASK)` - Performs a 'bitwise and' operation between two masks.
-  * `Bitwise(MASK - MASK)` - Subtracts one mask from another.
-  * `Bitwise(MASK + MASK)` - Combine two masks.
+  * `Pixelwise(MASK & MASK)` - Performs a 'pixelwise and' operation between two masks.
+  * `Pixelwise(MASK - MASK)` - Subtracts one mask from another.
+  * `Pixelwise(MASK + MASK)` - Combine two masks.
   * `SEGM Detector (SEGS)` - Detects segmentation and returns SEGS from the input image.
   * `BBOX Detector (SEGS)` - Detects bounding boxes and returns SEGS from the input image.
   * `Dilate Mask` - Dilate Mask.
@@ -119,6 +119,7 @@ This custom node helps to conveniently enhance images through Detector, Detailer
     * `Dilate SEG_ELT` - Dilate the mask of SEG_ELT.
     * `From SEG_ELT` bbox - Extract coordinate from bbox in SEG_ELT
     * `From SEG_ELT` crop_region - Extract coordinate from crop_region in SEG_ELT
+  * `Count Elt in SEGS` - Number of Elts ins SEGS
  
 ### Pipe nodes
    * `ToDetailerPipe`, `FromDetailerPipe` - These nodes are used to bundle multiple inputs used in the detailer, such as models and vae, ..., into a single DETAILER_PIPE or extract the elements that are bundled in the DETAILER_PIPE.
@@ -220,10 +221,11 @@ This custom node helps to conveniently enhance images through Detector, Detailer
     > NOTE: The `sde` sampler and `uni_pc` sampler introduce additional noise during each step of the sampling process. To mitigate this, when sampling each region, the `uni_pc` sampler applies additional `dpmpp_fast`, and the sde sampler applies the `dpmpp_2m` sampler as an additional measure.
 
 ### Impact KSampler
-  * These samplers supports basic_pipe and AYS scheduler
+  * These samplers support basic_pipe and AYS scheduler
   * `KSampler (pipe)` - pipe version of KSampler
   * `KSampler (advanced/pipe)` - pipe version of KSamplerAdvacned
   * When converting the scheduler widget to input, refer to the `Impact Scheduler Adapter` node to resolve compatibility issues.
+  * `GITSScheduler Func Provider` - provider scheduler function for GITSScheduler
   
 
 ### Batch/List Util
@@ -256,6 +258,7 @@ This custom node helps to conveniently enhance images through Detector, Detailer
 
 ### HuggingFace nodes
   * These nodes provide functionalities based on HuggingFace repository models.
+  * The path where the HuggingFace model cache is stored can be changed through the `HF_HOME` environment variable.
   * `HF Transformers Classifier Provider` - This is a node that provides a classifier based on HuggingFace's transformers models.
     * The 'repo id' parameter should contain HuggingFace's repo id. When `preset_repo_id` is set to `Manual repo id`, use the manually entered repo id in `manual_repo_id`.
     * e.g. 'rizvandwiki/gender-classification-2' is a repository that provides a model for gender classification.
@@ -474,10 +477,9 @@ open-mmlab/[mmdetection](https://github.com/open-mmlab/mmdetection) - Object det
 
 biegert/[ComfyUI-CLIPSeg](https://github.com/biegert/ComfyUI-CLIPSeg) - This is a custom node that enables the use of CLIPSeg technology, which can find segments through prompts, in ComfyUI.
 
-BlenderNeok/[ComfyUI-TiledKSampler](https://github.com/BlenderNeko/ComfyUI_TiledKSampler) - 
-The tile sampler allows high-resolution sampling even in places with low GPU VRAM.
+BlenderNeok/[ComfyUI-TiledKSampler](https://github.com/BlenderNeko/ComfyUI_TiledKSampler) - The tile sampler allows high-resolution sampling even in places with low GPU VRAM.
 
-BlenderNeok/[ComfyUI_Noise](https://github.com/BlenderNeko/ComfyUI_Noise) - The noise injection feature relies on this function.
+BlenderNeok/[ComfyUI_Noise](https://github.com/BlenderNeko/ComfyUI_Noise) - The noise injection feature relies on this function and slerp code for noise variation
 
 WASasquatch/[was-node-suite-comfyui](https://github.com/WASasquatch/was-node-suite-comfyui) - A powerful custom node extensions of ComfyUI.
 

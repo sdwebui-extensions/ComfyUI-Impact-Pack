@@ -31,13 +31,13 @@ def do_install():
 
 
 # ensure dependency
-if not os.path.exists(os.path.join(subpack_path, ".git")) and os.path.exists(subpack_path):
-    print(f"### CompfyUI-Impact-Pack: corrupted subpack detected.")
-    shutil.rmtree(subpack_path)
+# if not os.path.exists(os.path.join(subpack_path, ".git")) and os.path.exists(subpack_path):
+#     print(f"### CompfyUI-Impact-Pack: corrupted subpack detected.")
+#     shutil.rmtree(subpack_path)
 
-if impact.config.get_config()['dependency_version'] < impact.config.dependency_version or not os.path.exists(subpack_path):
-    print(f"### ComfyUI-Impact-Pack: Updating dependencies [{impact.config.get_config()['dependency_version']} -> {impact.config.dependency_version}]")
-    do_install()
+# if impact.config.get_config()['dependency_version'] < impact.config.dependency_version or not os.path.exists(subpack_path):
+#     print(f"### ComfyUI-Impact-Pack: Updating dependencies [{impact.config.get_config()['dependency_version']} -> {impact.config.dependency_version}]")
+#     do_install()
 
 sys.path.append(subpack_path)
 
@@ -195,6 +195,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactScaleBy_BBOX_SEG_ELT": SEG_ELT_BBOX_ScaleBy,
     "ImpactFrom_SEG_ELT_bbox": From_SEG_ELT_bbox,
     "ImpactFrom_SEG_ELT_crop_region": From_SEG_ELT_crop_region,
+    "ImpactCount_Elts_in_SEGS": Count_Elts_in_SEGS,
 
     "BboxDetectorCombined_v2": BboxDetectorCombined,
     "SegmDetectorCombined_v2": SegmDetectorCombined,
@@ -297,7 +298,8 @@ NODE_CLASS_MAPPINGS = {
     "ImpactHFTransformersClassifierProvider": HF_TransformersClassifierProvider,
     "ImpactSEGSClassify": SEGS_Classify,
 
-    "ImpactSchedulerAdapter": ImpactSchedulerAdapter
+    "ImpactSchedulerAdapter": ImpactSchedulerAdapter,
+    "GITSSchedulerFuncProvider": GITSSchedulerFuncProvider
 }
 
 
@@ -320,13 +322,13 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MediaPipeFaceMeshToSEGS": "MediaPipe FaceMesh to SEGS",
     "MaskToSEGS": "MASK to SEGS",
     "MaskToSEGS_for_AnimateDiff": "MASK to SEGS for AnimateDiff",
-    "BitwiseAndMaskForEach": "Bitwise(SEGS & SEGS)",
-    "SubtractMaskForEach": "Bitwise(SEGS - SEGS)",
-    "ImpactSegsAndMask": "Bitwise(SEGS & MASK)",
-    "ImpactSegsAndMaskForEach": "Bitwise(SEGS & MASKS ForEach)",
-    "BitwiseAndMask": "Bitwise(MASK & MASK)",
-    "SubtractMask": "Bitwise(MASK - MASK)",
-    "AddMask": "Bitwise(MASK + MASK)",
+    "BitwiseAndMaskForEach": "Pixelwise(SEGS & SEGS)",
+    "SubtractMaskForEach": "Pixelwise(SEGS - SEGS)",
+    "ImpactSegsAndMask": "Pixelwise(SEGS & MASK)",
+    "ImpactSegsAndMaskForEach": "Pixelwise(SEGS & MASKS ForEach)",
+    "BitwiseAndMask": "Pixelwise(MASK & MASK)",
+    "SubtractMask": "Pixelwise(MASK - MASK)",
+    "AddMask": "Pixelwise(MASK + MASK)",
     "DetailerForEach": "Detailer (SEGS)",
     "DetailerForEachPipe": "Detailer (SEGS/pipe)",
     "DetailerForEachDebug": "DetailerDebug (SEGS)",
@@ -380,6 +382,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactFrom_SEG_ELT_crop_region": "From SEG_ELT crop_region",
     "ImpactDilate_Mask_SEG_ELT": "Dilate Mask (SEG_ELT)",
     "ImpactScaleBy_BBOX_SEG_ELT": "ScaleBy BBOX (SEG_ELT)",
+    "ImpactCount_Elts_in_SEGS": "Count Elts in SEGS",
     "ImpactDilateMask": "Dilate Mask",
     "ImpactGaussianBlurMask": "Gaussian Blur Mask",
     "ImpactDilateMaskInSEGS": "Dilate Mask (SEGS)",
@@ -429,6 +432,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SEGSPreviewCNet": "SEGSPreview (CNET Image)",
 
     "ImpactSchedulerAdapter": "Impact Scheduler Adapter",
+    "GITSSchedulerFuncProvider": "GITSScheduler Func Provider",
 }
 
 if not impact.config.get_config()['mmdet_skip']:
