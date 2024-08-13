@@ -35,7 +35,7 @@ def get_wildcard_dict():
 
 
 def wildcard_normalize(x):
-    return x.replace("\\", "/").lower()
+    return x.replace("\\", "/").replace(' ', '-').lower()
 
 
 def read_wildcard(k, v):
@@ -59,23 +59,28 @@ def read_wildcard_dict(wildcard_path):
             if file.endswith('.txt'):
                 file_path = os.path.join(root, file)
                 rel_path = os.path.relpath(file_path, wildcard_path)
-                key = os.path.splitext(rel_path)[0].replace('\\', '/').lower()
+                key = wildcard_normalize(os.path.splitext(rel_path)[0])
 
                 try:
                     with open(file_path, 'r', encoding="ISO-8859-1") as f:
                         lines = f.read().splitlines()
                         wildcard_dict[key] = lines
-                except UnicodeDecodeError:
+                except yaml.reader.ReaderError:
                     with open(file_path, 'r', encoding="UTF-8", errors="ignore") as f:
                         lines = f.read().splitlines()
                         wildcard_dict[key] = lines
             elif file.endswith('.yaml'):
                 file_path = os.path.join(root, file)
-                with open(file_path, 'r') as f:
-                    yaml_data = yaml.load(f, Loader=yaml.FullLoader)
 
-                    for k, v in yaml_data.items():
-                        read_wildcard(k, v)
+                try:
+                    with open(file_path, 'r', encoding="ISO-8859-1") as f:
+                        yaml_data = yaml.load(f, Loader=yaml.FullLoader)
+                except yaml.reader.ReaderError as e:
+                    with open(file_path, 'r', encoding="UTF-8", errors="ignore") as f:
+                        yaml_data = yaml.load(f, Loader=yaml.FullLoader)
+
+                for k, v in yaml_data.items():
+                    read_wildcard(k, v)
 
     return wildcard_dict
 
@@ -108,6 +113,8 @@ def process(text, seed=None):
         random.seed(seed)
     random_gen = np.random.default_rng(seed)
 
+    local_wildcard_dict = get_wildcard_dict()
+
     def replace_options(string):
         replacements_found = False
 
@@ -120,6 +127,7 @@ def process(text, seed=None):
             select_sep = ' '
             range_pattern = r'(\d+)(-(\d+))?'
             range_pattern2 = r'-(\d+)'
+            wildcard_pattern = r"__([\w.\-+/*\\]+)__"
 
             if len(multi_select_pattern) > 1:
                 r = re.match(range_pattern, options[0])
@@ -145,7 +153,13 @@ def process(text, seed=None):
 
                     if select_range is not None and len(multi_select_pattern) == 2:
                         # PATTERN: count$$
-                        options[0] = multi_select_pattern[1]
+                        matches = re.findall(wildcard_pattern, multi_select_pattern[1])
+                        if len(options) == 1 and matches:
+                            # count$$<single wildcard>
+                            options = local_wildcard_dict.get(matches[0])
+                        else:
+                            # count$$opt1|opt2|...
+                            options[0] = multi_select_pattern[1]
                     elif select_range is not None and len(multi_select_pattern) == 3:
                         # PATTERN: count$$ sep $$
                         select_sep = multi_select_pattern[1]
@@ -192,7 +206,6 @@ def process(text, seed=None):
         return replaced_string, replacements_found
 
     def replace_wildcard(string):
-        local_wildcard_dict = get_wildcard_dict()
         pattern = r"__([\w.\-+/*\\]+)__"
         matches = re.findall(pattern, string)
 

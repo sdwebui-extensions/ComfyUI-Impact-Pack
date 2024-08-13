@@ -208,6 +208,8 @@ NODE_CLASS_MAPPINGS = {
     "KSamplerAdvancedProvider": KSamplerAdvancedProvider,
     "TwoAdvancedSamplersForMask": TwoAdvancedSamplersForMask,
 
+    "ImpactNegativeConditioningPlaceholder": NegativeConditioningPlaceholder,
+
     "PreviewBridge": PreviewBridge,
     "PreviewBridgeLatent": PreviewBridgeLatent,
     "ImageSender": ImageSender,
@@ -279,6 +281,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactStringSelector": StringSelector,
     "StringListToString": StringListToString,
     "WildcardPromptFromString": WildcardPromptFromString,
+    "ImpactExecutionOrderController": ImpactExecutionOrderController,
 
     "RemoveNoiseMask": RemoveNoiseMask,
 
@@ -395,6 +398,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageMaskSwitch": "Switch (images, mask)",
     "ImpactSwitch": "Switch (Any)",
     "ImpactInversedSwitch": "Inversed Switch (Any)",
+    "ImpactExecutionOrderController": "Execution Order Controller",
 
     "MasksToMaskList": "Masks to Mask List",
     "MaskListToMaskBatch": "Mask List to Masks",
@@ -433,6 +437,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
     "ImpactSchedulerAdapter": "Impact Scheduler Adapter",
     "GITSSchedulerFuncProvider": "GITSScheduler Func Provider",
+    "ImpactNegativeConditioningPlaceholder": "Negative Cond Placeholder"
 }
 
 if not impact.config.get_config()['mmdet_skip']:
@@ -473,7 +478,13 @@ except Exception as e:
     traceback.print_exc()
     print("---------------------------------\n")
 
-WEB_DIRECTORY = "js"
+# NOTE:  Inject directly into EXTENSION_WEB_DIRS instead of WEB_DIRECTORY
+#        Provide the js path fixed as ComfyUI-Impact-Pack instead of the path name, making it available for external use
+
+# WEB_DIRECTORY = "js"  -- deprecated method
+nodes.EXTENSION_WEB_DIRS["ComfyUI-Impact-Pack"] = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'js')
+
+
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
 
 

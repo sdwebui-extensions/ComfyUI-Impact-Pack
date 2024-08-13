@@ -115,7 +115,6 @@ def is_requirements_installed(file_path):
 
 try:
     import platform
-    import folder_paths
     from torchvision.datasets.utils import download_url
     import impact.config
 
@@ -151,28 +150,6 @@ try:
 
         if os.path.exists(old_subpack_path):
             shutil.rmtree(old_subpack_path)
-
-
-    def remove_olds():
-        global comfy_path
-        global model_path
-
-        comfy_path = os.path.dirname(folder_paths.__file__)
-        custom_nodes_path = os.path.join(comfy_path, "custom_nodes")
-        old_ini_path = os.path.join(custom_nodes_path, "impact-pack.ini")
-        old_py_path = os.path.join(custom_nodes_path, "comfyui-impact-pack.py")
-
-        if os.path.exists(impact.config.old_config_path):
-            impact.config.get_config()['mmdet_skip'] = False
-            os.remove(impact.config.old_config_path)
-
-        if os.path.exists(old_ini_path):
-            print(f"Delete legacy file: {old_ini_path}")
-            os.remove(old_ini_path)
-
-        if os.path.exists(old_py_path):
-            print(f"Delete legacy file: {old_py_path}")
-            os.remove(old_py_path)
 
 
     def ensure_pip_packages_first():
@@ -262,8 +239,6 @@ try:
 
 
     def install():
-        # remove_olds()
-
         subpack_install_script = os.path.join(subpack_path, "install.py")
 
         print(f"### ComfyUI-Impact-Pack: Updating subpack")

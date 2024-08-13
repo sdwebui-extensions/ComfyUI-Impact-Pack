@@ -28,8 +28,8 @@ import base64
 import impact.wildcards as wildcards
 from . import hooks
 from comfy.cli_args import args
-from file_utils import async_file_cp
 
+from . import utils
 
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
@@ -72,7 +72,7 @@ add_folder_path_and_extensions("mmdets_bbox", [os.path.join(model_path, "mmdets"
 add_folder_path_and_extensions("mmdets_segm", [os.path.join(model_path, "mmdets", "segm"), "/stable-diffusion-cache/models/mmdets/segm"], folder_paths.supported_pt_extensions)
 add_folder_path_and_extensions("mmdets", [os.path.join(model_path, "mmdets"), "/stable-diffusion-cache/models/mmdets"], folder_paths.supported_pt_extensions)
 add_folder_path_and_extensions("sams", [os.path.join(model_path, "sams"), "/stable-diffusion-cache/models/sams"], folder_paths.supported_pt_extensions)
-add_folder_path_and_extensions("onnx", [os.path.join(model_path, "onnx")], {'.onnx'})
+add_folder_path_and_extensions("onnx", [os.path.join(model_path, "onnx"), "/stable-diffusion-cache/models/mmdets/onnx"], {'.onnx'})
 
 
 # Nodes
@@ -312,13 +312,17 @@ class DetailerForEach:
                 for condition, details in positive
             ]
 
-            cropped_negative = [
-                [condition, {
-                    k: core.crop_condition_mask(v, image, seg.crop_region) if k == "mask" else v
-                    for k, v in details.items()
-                }]
-                for condition, details in negative
-            ]
+            if not isinstance(negative, str):
+                cropped_negative = [
+                    [condition, {
+                        k: core.crop_condition_mask(v, image, seg.crop_region) if k == "mask" else v
+                        for k, v in details.items()
+                    }]
+                    for condition, details in negative
+                ]
+            else:
+                # Negative Conditioning is placeholder such as FLUX.1
+                cropped_negative = negative
 
             enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for_bbox, max_size,
                                                             seg.bbox, seg_seed, steps, cfg, sampler_name, scheduler,
@@ -998,7 +1002,10 @@ class PixelTiledKSampleUpscalerProvider:
                                                       tile_size=max(tile_width, tile_height), tile_cnet_strength=tile_cnet_strength)
             return (upscaler, )
         else:
-            print("[ERROR] PixelTiledKSampleUpscalerProvider: ComfyUI_TiledKSampler custom node isn't installed. You must install BlenderNeko/ComfyUI_TiledKSampler extension to use this node.")
+            utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
+                                          "To use 'PixelTiledKSampleUpscalerProvider' node, 'BlenderNeko/ComfyUI_TiledKSampler' extension is required.")
+
+            raise Exception("[ERROR] PixelTiledKSampleUpscalerProvider: ComfyUI_TiledKSampler custom node isn't installed. You must install BlenderNeko/ComfyUI_TiledKSampler extension to use this node.")
 
 
 class PixelTiledKSampleUpscalerProviderPipe:

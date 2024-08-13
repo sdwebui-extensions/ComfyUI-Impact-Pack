@@ -239,6 +239,11 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
             positive = nodes.ConditioningConcat().concat(positive, wildcard_positive)[0]
         else:
             positive = wildcard_positive
+            positive = [positive[0].copy()]
+            if 'pooled_output' in wildcard_positive[0][1]:
+                positive[0][1]['pooled_output'] = wildcard_positive[0][1]['pooled_output']
+            elif 'pooled_output' in positive[0][1]:
+                del positive[0][1]['pooled_output']
 
     h = image.shape[1]
     w = image.shape[2]
@@ -592,6 +597,9 @@ class ESAMWrapper:
 def make_sam_mask(sam, segs, image, detection_hint, dilation,
                   threshold, bbox_expansion, mask_hint_threshold, mask_hint_use_negative):
 
+    if not hasattr(sam, 'sam_wrapper'):
+        raise Exception("[Impact Pack] Invalid SAMLoader is connected. Make sure 'SAMLoader (Impact)'.\nKnown issue: The ComfyUI-YOLO node overrides the SAMLoader (Impact), making it unusable. You need to uninstall ComfyUI-YOLO.\n\n\n")
+
     sam_obj = sam.sam_wrapper
     sam_obj.prepare_device()
 
@@ -858,6 +866,10 @@ def every_three_pick_last(stacked_masks):
 
 def make_sam_mask_segmented(sam, segs, image, detection_hint, dilation,
                             threshold, bbox_expansion, mask_hint_threshold, mask_hint_use_negative):
+
+    if not hasattr(sam, 'sam_wrapper'):
+        raise Exception("[Impact Pack] Invalid SAMLoader is connected. Make sure 'SAMLoader (Impact)'.")
+
     sam_obj = sam.sam_wrapper
     sam_obj.prepare_device()
 
@@ -1196,7 +1208,7 @@ def mask_to_segs(mask, combined, crop_factor, bbox_fill, drop_size=1, label='A',
                         cropped_mask[by1:by2, bx1:bx2] = 1.0
 
                     if cropped_mask is not None:
-                        cropped_mask = utils.to_binary_mask(torch.from_numpy(cropped_mask), 0.1)[0]
+                        cropped_mask = torch.clip(torch.from_numpy(cropped_mask), 0, 1.0)
                         item = SEG(None, cropped_mask.numpy(), 1.0, crop_region, bbox, label, None)
                         result.append(item)
 

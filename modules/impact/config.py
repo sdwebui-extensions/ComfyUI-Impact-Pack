@@ -1,7 +1,7 @@
 import configparser
 import os
 
-version_code = [5, 18, 4]
+version_code = [6, 2]
 version = f"V{version_code[0]}.{version_code[1]}" + (f'.{version_code[2]}' if len(version_code) > 2 else '')
 
 dependency_version = 22
@@ -31,6 +31,10 @@ def read_config():
         config = configparser.ConfigParser()
         config.read(config_path)
         default_conf = config['default']
+
+        if not os.path.exists(default_conf['custom_wildcards']):
+            print(f"[WARN] ComfyUI-Impact-Pack: custom_wildcards path not found: {default_conf['custom_wildcards']}. Using default path.")
+            default_conf['custom_wildcards'] = os.path.join(my_path, "..", "..", "custom_wildcards")
 
         return {
                     'dependency_version': int(default_conf['dependency_version']),

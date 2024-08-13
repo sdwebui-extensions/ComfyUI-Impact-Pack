@@ -150,7 +150,7 @@ class ImpactIfNone:
             "optional": {"signal": (any_typ,), "any_input": (any_typ,), }
         }
 
-    RETURN_TYPES = (any_typ, "BOOLEAN", )
+    RETURN_TYPES = (any_typ, "BOOLEAN")
     RETURN_NAMES = ("signal_opt", "bool")
     FUNCTION = "doit"
 
@@ -697,6 +697,24 @@ class ImpactControlBridge:
                 nodes.interrupt_processing()
 
         return (value, )
+
+
+class ImpactExecutionOrderController:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+                    "signal": (any_typ,),
+                    "value": (any_typ,),
+                    }}
+
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+    RETURN_TYPES = (any_typ, any_typ)
+    RETURN_NAMES = ("signal", "value")
+
+    def doit(self, signal, value):
+        return signal, value
 
 
 original_handle_execution = execution.PromptExecutor.handle_execution_error
