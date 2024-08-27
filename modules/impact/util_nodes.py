@@ -6,29 +6,49 @@ import comfy
 import sys
 import nodes
 import re
+import impact.core as core
 from server import PromptServer
+import inspect
 
 
 class GeneralSwitch:
     @classmethod
     def INPUT_TYPES(s):
-        return {"required": {
-                    "select": ("INT", {"default": 1, "min": 1, "max": 999999, "step": 1}),
-                    "sel_mode": ("BOOLEAN", {"default": True, "label_on": "select_on_prompt", "label_off": "select_on_execution", "forceInput": False}),
+        dyn_inputs = {"input1": (any_typ, {"lazy": True, "tooltip": "Any input. When connected, one more input slot is added."}), }
+        if core.is_execution_model_version_supported():
+            stack = inspect.stack()
+            if stack[2].function == 'get_input_info' and stack[3].function == 'add_node':
+                for x in range(2, 200):
+                    dyn_inputs[f"input{x}"] = (any_typ, {"lazy": True})
+
+        inputs = {"required": {
+                    "select": ("INT", {"default": 1, "min": 1, "max": 999999, "step": 1, "tooltip": "The input number you want to output among the inputs"}),
+                    "sel_mode": ("BOOLEAN", {"default": False, "label_on": "select_on_prompt", "label_off": "select_on_execution", "forceInput": False,
+                                             "tooltip": "In the case of 'select_on_execution', the selection is dynamically determined at the time of workflow execution. 'select_on_prompt' is an option that exists for older versions of ComfyUI, and it makes the decision before the workflow execution."}),
                     },
-                "optional": {
-                    "input1": (any_typ,),
-                    },
+                "optional": dyn_inputs,
                 "hidden": {"unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"}
                 }
 
+        return inputs
+
     RETURN_TYPES = (any_typ, "STRING", "INT")
     RETURN_NAMES = ("selected_value", "selected_label", "selected_index")
+    OUTPUT_TOOLTIPS = ("Output is generated only from the input chosen by the 'select' value.", "Slot label of the selected input slot", "Outputs the select value as is")
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, *args, **kwargs):
+    def check_lazy_status(self, *args, **kwargs):
+        selected_index = int(kwargs['select'])
+        input_name = f"input{selected_index}"
+
+        print(f"SELECTED: {input_name}")
+
+        return [input_name]
+
+    @staticmethod
+    def doit(*args, **kwargs):
         selected_index = int(kwargs['select'])
         input_name = f"input{selected_index}"
 
@@ -50,11 +70,10 @@ class GeneralSwitch:
             print(f"[Impact-Pack] The switch node does not guarantee proper functioning in API mode.")
 
         if input_name in kwargs:
-            return (kwargs[input_name], selected_label, selected_index)
+            return kwargs[input_name], selected_label, selected_index
         else:
             print(f"ImpactSwitch: invalid select index (ignored)")
-            return (None, "", selected_index)
-
+            return None, "", selected_index
 
 class LatentSwitch:
     @classmethod
@@ -126,23 +145,44 @@ class GeneralInversedSwitch:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "select": ("INT", {"default": 1, "min": 1, "max": 999999, "step": 1}),
-                    "input": (any_typ,),
+                    "select": ("INT", {"default": 1, "min": 1, "max": 999999, "step": 1, "tooltip": "The output number you want to send from the input"}),
+                    "input": (any_typ, {"tooltip": "Any input. When connected, one more input slot is added."}),
+
                     },
-                "hidden": {"unique_id": "UNIQUE_ID"},
+                "optional": {
+                    "sel_mode": ("BOOLEAN", {"default": False, "label_on": "select_on_prompt", "label_off": "select_on_execution", "forceInput": False,
+                                             "tooltip": "In the case of 'select_on_execution', the selection is dynamically determined at the time of workflow execution. 'select_on_prompt' is an option that exists for older versions of ComfyUI, and it makes the decision before the workflow execution."}),
+                    },
+                "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
                 }
 
     RETURN_TYPES = ByPassTypeTuple((any_typ, ))
+    OUTPUT_TOOLTIPS = ("Output occurs only from the output selected by the 'select' value.\nWhen slots are connected, additional slots are created.", )
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
 
-    def doit(self, select, input, unique_id):
+    def doit(self, select, prompt, unique_id, input, **kwargs):
+        if core.is_execution_model_version_supported:
+            from comfy_execution.graph import ExecutionBlocker
+        else:
+            print("[Impact Pack] InversedSwitch: ComfyUI is outdated. The 'select_on_execution' mode cannot function properly.")
+
         res = []
 
-        for i in range(0, select):
+        # search max output count in prompt
+        cnt = 0
+        for x in prompt.values():
+            for y in x.get('inputs', {}).values():
+                if isinstance(y, list) and len(y) == 2:
+                    if y[0] == unique_id:
+                        cnt = max(cnt, y[1])
+
+        for i in range(0, cnt + 1):
             if select == i+1:
                 res.append(input)
+            elif core.is_execution_model_version_supported:
+                res.append(ExecutionBlocker(None))
             else:
                 res.append(None)
 
