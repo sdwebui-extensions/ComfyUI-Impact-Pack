@@ -17,9 +17,16 @@ class GeneralSwitch:
         dyn_inputs = {"input1": (any_typ, {"lazy": True, "tooltip": "Any input. When connected, one more input slot is added."}), }
         if core.is_execution_model_version_supported():
             stack = inspect.stack()
-            if stack[2].function == 'get_input_info' and stack[3].function == 'add_node':
-                for x in range(2, 200):
-                    dyn_inputs[f"input{x}"] = (any_typ, {"lazy": True})
+            if stack[2].function == 'get_input_info':
+                # bypass validation
+                class AllContainer:
+                    def __contains__(self, item):
+                        return True
+
+                    def __getitem__(self, key):
+                        return any_typ, {"lazy": True}
+
+                dyn_inputs = AllContainer()
 
         inputs = {"required": {
                     "select": ("INT", {"default": 1, "min": 1, "max": 999999, "step": 1, "tooltip": "The input number you want to output among the inputs"}),
@@ -45,7 +52,10 @@ class GeneralSwitch:
 
         print(f"SELECTED: {input_name}")
 
-        return [input_name]
+        if input_name in kwargs:
+            return [input_name]
+        else:
+            return []
 
     @staticmethod
     def doit(*args, **kwargs):
@@ -163,7 +173,7 @@ class GeneralInversedSwitch:
     CATEGORY = "ImpactPack/Util"
 
     def doit(self, select, prompt, unique_id, input, **kwargs):
-        if core.is_execution_model_version_supported:
+        if core.is_execution_model_version_supported():
             from comfy_execution.graph import ExecutionBlocker
         else:
             print("[Impact Pack] InversedSwitch: ComfyUI is outdated. The 'select_on_execution' mode cannot function properly.")
@@ -181,7 +191,7 @@ class GeneralInversedSwitch:
         for i in range(0, cnt + 1):
             if select == i+1:
                 res.append(input)
-            elif core.is_execution_model_version_supported:
+            elif core.is_execution_model_version_supported():
                 res.append(ExecutionBlocker(None))
             else:
                 res.append(None)
@@ -366,7 +376,7 @@ class ImageListToImageBatch:
 
     def doit(self, images):
         if len(images) <= 1:
-            return (images,)
+            return (images[0],)
         else:
             image1 = images[0]
             for image2 in images[1:]:
@@ -390,6 +400,50 @@ class ImageBatchToImageList:
     def doit(self, image):
         images = [image[i:i + 1, ...] for i in range(image.shape[0])]
         return (images, )
+
+
+class MakeAnyList:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {},
+            "optional": {"value1": (any_typ,), }
+        }
+
+    RETURN_TYPES = (any_typ,)
+    OUTPUT_IS_LIST = (True,)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    def doit(self, **kwargs):
+        values = []
+
+        for k, v in kwargs.items():
+            if v is not None:
+                values.append(v)
+
+        return (values, )
+
+
+class MakeMaskList:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {"mask1": ("MASK",), }}
+
+    RETURN_TYPES = ("MASK",)
+    OUTPUT_IS_LIST = (True,)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    def doit(self, **kwargs):
+        masks = []
+
+        for k, v in kwargs.items():
+            masks.append(v)
+
+        return (masks, )
 
 
 class MakeImageList:
@@ -437,6 +491,31 @@ class MakeImageBatch:
             return (image1,)
 
 
+class MakeMaskBatch:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {"mask1": ("MASK",), }}
+
+    RETURN_TYPES = ("MASK",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    def doit(self, **kwargs):
+        mask1 = kwargs['mask1']
+        del kwargs['mask1']
+        masks = [make_3d_mask(value) for value in kwargs.values()]
+
+        if len(masks) == 0:
+            return (mask1,)
+        else:
+            for mask2 in masks:
+                if mask1.shape[1:] != mask2.shape[1:]:
+                    mask2 = comfy.utils.common_upscale(mask2.movedim(-1, 1), mask1.shape[2], mask1.shape[1], "lanczos", "center").movedim(1, -1)
+                mask1 = torch.cat((mask1, mask2), dim=0)
+            return (mask1,)
+
+
 class ReencodeLatent:
     @classmethod
     def INPUT_TYPES(s):
@@ -447,6 +526,9 @@ class ReencodeLatent:
                         "output_vae": ("VAE", ),
                         "tile_size": ("INT", {"default": 512, "min": 320, "max": 4096, "step": 64}),
                     },
+                "optional": {
+                    "overlap": ("INT", {"default": 64, "min": 0, "max": 4096, "step": 32, "tooltip": "This setting applies when 'tile_mode' is enabled."}),
+                    }
                 }
 
     CATEGORY = "ImpactPack/Util"
@@ -454,14 +536,22 @@ class ReencodeLatent:
     RETURN_TYPES = ("LATENT", )
     FUNCTION = "doit"
 
-    def doit(self, samples, tile_mode, input_vae, output_vae, tile_size=512):
+    def doit(self, samples, tile_mode, input_vae, output_vae, tile_size=512, overlap=64):
         if tile_mode in ["Both", "Decode(input) only"]:
-            pixels = nodes.VAEDecodeTiled().decode(input_vae, samples, tile_size)[0]
+            decoder = nodes.VAEDecodeTiled()
+            if 'overlap' in inspect.signature(decoder.decode).parameters:
+                pixels = decoder.decode(input_vae, samples, tile_size, overlap=overlap)[0]
+            else:
+                pixels = decoder.decode(input_vae, samples, tile_size, overlap=overlap)[0]
         else:
             pixels = nodes.VAEDecode().decode(input_vae, samples)[0]
 
         if tile_mode in ["Both", "Encode(output) only"]:
-            return nodes.VAEEncodeTiled().encode(output_vae, pixels, tile_size)
+            encoder = nodes.VAEEncodeTiled()
+            if 'overlap' in inspect.signature(encoder.encode).parameters:
+                return encoder.encode(output_vae, pixels, tile_size, overlap=overlap)
+            else:
+                return encoder.encode(output_vae, pixels, tile_size)
         else:
             return nodes.VAEEncode().encode(output_vae, pixels)
 

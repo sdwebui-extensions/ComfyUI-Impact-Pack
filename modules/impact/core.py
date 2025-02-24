@@ -11,6 +11,7 @@ from impact.utils import *
 from collections import namedtuple
 import numpy as np
 from skimage.measure import label
+from PIL import ImageOps
 
 import nodes
 import comfy_extras.nodes_upscale_model as model_upscale
@@ -24,6 +25,8 @@ from comfy import model_management
 from impact import utils
 from impact import impact_sampling
 from concurrent.futures import ThreadPoolExecutor
+import inspect
+
 
 try:
     from comfy_extras import nodes_differential_diffusion
@@ -39,10 +42,13 @@ SEG = namedtuple("SEG",
 pb_id_cnt = time.time()
 preview_bridge_image_id_map = {}
 preview_bridge_image_name_map = {}
+
 preview_bridge_cache = {}
+preview_bridge_last_mask_cache = {}
+
 current_prompt = None
 
-SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]']
+SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]']
 
 
 def is_execution_model_version_supported():
@@ -64,6 +70,13 @@ def set_previewbridge_image(node_id, file, item):
     pb_id = f"${node_id}-{pb_id_cnt}"
     preview_bridge_image_id_map[pb_id] = (file, item)
     preview_bridge_image_name_map[node_id, file] = (pb_id, item)
+    if os.path.isfile(file):
+        i = Image.open(file)
+        i = ImageOps.exif_transpose(i)
+        if 'A' in i.getbands():
+            mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
+            mask = 1. - torch.from_numpy(mask)
+            preview_bridge_last_mask_cache[node_id] = mask.unsqueeze(0)
     pb_id_cnt += 1
 
     return pb_id
@@ -231,13 +244,14 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
                    detailer_hook=None,
                    refiner_ratio=None, refiner_model=None, refiner_clip=None, refiner_positive=None,
                    refiner_negative=None, control_net_wrapper=None, cycle=1,
-                   inpaint_model=False, noise_mask_feather=0, scheduler_func=None):
+                   inpaint_model=False, noise_mask_feather=0, scheduler_func=None,
+                   vae_tiled_encode=False, vae_tiled_decode=False):
 
     if noise_mask is not None:
         noise_mask = utils.tensor_gaussian_blur_mask(noise_mask, noise_mask_feather)
         noise_mask = noise_mask.squeeze(3)
 
-        if noise_mask_feather > 0:
+        if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
             model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
     if wildcard_opt is not None and wildcard_opt != "":
@@ -314,9 +328,14 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
 
     # prepare mask
     if noise_mask is not None and inpaint_model:
-        positive, negative, latent_image = nodes.InpaintModelConditioning().encode(positive, negative, upscaled_image, vae, noise_mask)
+        imc_encode = nodes.InpaintModelConditioning().encode
+        if 'noise_mask' in inspect.signature(imc_encode).parameters:
+            positive, negative, latent_image = imc_encode(positive, negative, upscaled_image, vae, mask=noise_mask, noise_mask=True)
+        else:
+            print(f"[Impact Pack] ComfyUI is an outdated version.")
+            positive, negative, latent_image = imc_encode(positive, negative, upscaled_image, vae, noise_mask)
     else:
-        latent_image = to_latent_image(upscaled_image, vae)
+        latent_image = to_latent_image(upscaled_image, vae, vae_tiled_encode=vae_tiled_encode)
         if noise_mask is not None:
             latent_image['noise_mask'] = noise_mask
 
@@ -351,12 +370,18 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
         refined_latent = detailer_hook.pre_decode(refined_latent)
 
     # non-latent downscale - latent downscale cause bad quality
-    try:
-        # try to decode image normally
-        refined_image = vae.decode(refined_latent['samples'])
-    except Exception as e:
-        #usually an out-of-memory exception from the decode, so try a tiled approach
-        refined_image = vae.decode_tiled(refined_latent["samples"], tile_x=64, tile_y=64, )
+    start = time.time()
+    if vae_tiled_decode:
+        (refined_image,) = nodes.VAEDecodeTiled().decode(vae, refined_latent, 512) # using default settings
+        print(f"[Impact Pack] vae decoded (tiled) in {time.time() - start:.1f}s")
+    else:
+        try:
+            refined_image = vae.decode(refined_latent['samples'])
+        except Exception as e:
+            # usually an out-of-memory exception from the decode, so try a tiled approach
+            print(f"[Impact Pack] failed after {time.time() - start:.1f}s, doing vae.decode_tiled 64...")
+            refined_image = vae.decode_tiled(refined_latent["samples"], tile_x=64, tile_y=64, )
+        print(f"[Impact Pack] vae decoded in {time.time() - start:.1f}s")
 
     if detailer_hook is not None:
         refined_image = detailer_hook.post_decode(refined_image)
@@ -383,7 +408,7 @@ def enhance_detail_for_animatediff(image_frames, model, clip, vae, guide_size, g
         noise_mask = utils.tensor_gaussian_blur_mask(noise_mask, noise_mask_feather)
         noise_mask = noise_mask.squeeze(3)
 
-    if noise_mask_feather > 0:
+    if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
         model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
     if wildcard_opt is not None and wildcard_opt != "":
@@ -1349,9 +1374,14 @@ def segs_to_masklist(segs):
     return masks
 
 
-def vae_decode(vae, samples, use_tile, hook, tile_size=512):
+def vae_decode(vae, samples, use_tile, hook, tile_size=512, overlap=64):
     if use_tile:
-        pixels = nodes.VAEDecodeTiled().decode(vae, samples, tile_size)[0]
+        decoder = nodes.VAEDecodeTiled()
+        if 'overlap' in inspect.signature(decoder.decode).parameters:
+            pixels = decoder.decode(vae, samples, tile_size, overlap=overlap)[0]
+        else:
+            print(f"[Impact Pack] Your ComfyUI is outdated.")
+            pixels = decoder.decode(vae, samples, tile_size)[0]
     else:
         pixels = nodes.VAEDecode().decode(vae, samples)[0]
 
@@ -1361,9 +1391,14 @@ def vae_decode(vae, samples, use_tile, hook, tile_size=512):
     return pixels
 
 
-def vae_encode(vae, pixels, use_tile, hook, tile_size=512):
+def vae_encode(vae, pixels, use_tile, hook, tile_size=512, overlap=64):
     if use_tile:
-        samples = nodes.VAEEncodeTiled().encode(vae, pixels, tile_size)[0]
+        encoder = nodes.VAEEncodeTiled()
+        if 'overlap' in inspect.signature(encoder.encode).parameters:
+            samples = encoder.encode(vae, pixels, tile_size, overlap=overlap)[0]
+        else:
+            print(f"[Impact Pack] Your ComfyUI is outdated.")
+            samples = encoder.encode(vae, pixels, tile_size)[0]
     else:
         samples = nodes.VAEEncode().encode(vae, pixels)[0]
 
@@ -1373,12 +1408,12 @@ def vae_encode(vae, pixels, use_tile, hook, tile_size=512):
     return samples
 
 
-def latent_upscale_on_pixel_space_shape(samples, scale_method, w, h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
-    return latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+def latent_upscale_on_pixel_space_shape(samples, scale_method, w, h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    return latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_tile, tile_size, save_temp_prefix, hook, overlap=overlap)[0]
 
 
-def latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
-    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
+def latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size, overlap=overlap)
 
     if save_temp_prefix is not None:
         nodes.PreviewImage().save_images(pixels, filename_prefix=save_temp_prefix)
@@ -1389,15 +1424,15 @@ def latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_t
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
-def latent_upscale_on_pixel_space(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
-    return latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+def latent_upscale_on_pixel_space(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    return latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook, overlap=overlap)[0]
 
 
-def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
-    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
+def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size, overlap=overlap)
 
     if save_temp_prefix is not None:
         nodes.PreviewImage().save_images(pixels, filename_prefix=save_temp_prefix)
@@ -1410,15 +1445,15 @@ def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
-def latent_upscale_on_pixel_space_with_model_shape(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
-    return latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+def latent_upscale_on_pixel_space_with_model_shape(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    return latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile, tile_size, save_temp_prefix, hook, overlap=overlap)[0]
 
 
-def latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None):
-    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
+def latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size, overlap=overlap)
 
     if save_temp_prefix is not None:
         nodes.PreviewImage().save_images(pixels, filename_prefix=save_temp_prefix)
@@ -1441,16 +1476,16 @@ def latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upsca
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
 def latent_upscale_on_pixel_space_with_model(samples, scale_method, upscale_model, scale_factor, vae, use_tile=False,
-                                             tile_size=512, save_temp_prefix=None, hook=None):
-    return latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_model, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook)[0]
+                                             tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    return latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_model, scale_factor, vae, use_tile, tile_size, save_temp_prefix, hook, overlap=overlap)[0]
 
 def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_model, scale_factor, vae, use_tile=False,
-                                              tile_size=512, save_temp_prefix=None, hook=None):
-    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size)
+                                              tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
+    pixels = vae_decode(vae, samples, use_tile, hook, tile_size=tile_size, overlap=overlap)
 
     if save_temp_prefix is not None:
         nodes.PreviewImage().save_images(pixels, filename_prefix=save_temp_prefix)
@@ -1477,7 +1512,7 @@ def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_mod
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
 class TwoSamplersForMaskUpscaler:
@@ -1647,8 +1682,14 @@ class PixelKSampleUpscaler:
                 preprocessor = nodes.NODE_CLASS_MAPPINGS['TilePreprocessor']()
                 # might add capacity to set pyrUp_iters later, not needed for now though
                 preprocessed = preprocessor.execute(images, pyrUp_iters=3, resolution=min(image_w, image_h))[0]
-                apply_cnet = getattr(nodes.ControlNetApply(), nodes.ControlNetApply.FUNCTION)
-                positive = apply_cnet(positive, self.tile_cnet, preprocessed, strength=self.tile_cnet_strength)[0]
+                positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive=positive,
+                                                                                      negative=negative,
+                                                                                      control_net=self.tile_cnet,
+                                                                                      image=preprocessed,
+                                                                                      strength=self.tile_cnet_strength,
+                                                                                      start_percent=0,
+                                                                                      end_percent=1.0,
+                                                                                      vae=self.vae)
 
         refined_latent = impact_sampling.impact_sample(model, seed, steps, cfg, sampler_name, scheduler,
                                                        positive, negative, upscaled_latent, denoise, scheduler_func=self.scheduler_func)
@@ -1680,6 +1721,9 @@ class PixelKSampleUpscaler:
                 self.hook.pre_ksample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                                       upscaled_latent, denoise)
 
+        if 'noise_mask' in samples:
+            upscaled_latent['noise_mask'] = samples['noise_mask']
+
         refined_latent = self.sample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, upscaled_latent, denoise, upscaled_images)
         return refined_latent
 
@@ -1708,6 +1752,9 @@ class PixelKSampleUpscaler:
             model, seed, steps, cfg, sampler_name, scheduler, positive, negative, upscaled_latent, denoise = \
                 self.hook.pre_ksample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                                       upscaled_latent, denoise)
+
+        if 'noise_mask' in samples:
+            upscaled_latent['noise_mask'] = samples['noise_mask']
 
         refined_latent = self.sample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, upscaled_latent, denoise, upscaled_images)
         return refined_latent
@@ -1819,13 +1866,14 @@ class ControlNetWrapper:
 
 class ControlNetAdvancedWrapper:
     def __init__(self, control_net, strength, start_percent, end_percent, preprocessor, prev_control_net=None,
-                 original_size=None, crop_region=None, control_image=None):
+                 original_size=None, crop_region=None, control_image=None, vae=None):
         self.control_net = control_net
         self.strength = strength
         self.preprocessor = preprocessor
         self.prev_control_net = prev_control_net
         self.start_percent = start_percent
         self.end_percent = end_percent
+        self.vae = vae
 
         if original_size is not None and crop_region is not None and control_image is not None:
             self.control_image = utils.tensor_resize(control_image, original_size[1], original_size[0])
@@ -1866,7 +1914,17 @@ class ControlNetAdvancedWrapper:
                                               "To use 'ControlNetAdvancedWrapper' for AnimateDiff, 'ComfyUI-Advanced-ControlNet' extension is required.")
                 raise Exception("'ACN_AdvancedControlNetApply' node isn't installed.")
         else:
-            positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent)
+            if self.vae is not None:
+                apply_controlnet = nodes.ControlNetApplyAdvanced().apply_controlnet
+                signature = inspect.signature(apply_controlnet)
+
+                if 'vae' in signature.parameters:
+                    positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent, vae=self.vae)
+                else:
+                    print(f"[Impact Pack] ERROR: The ComfyUI version is outdated. VAE cannot be used in ApplyControlNet.")
+                    raise Exception("[Impact Pack] ERROR: The ComfyUI version is outdated. VAE cannot be used in ApplyControlNet.")
+            else:
+                positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent)
 
         return positive, negative, cnet_image_list
 
@@ -1902,7 +1960,7 @@ class PixelTiledKSampleUpscaler:
     def __init__(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                  denoise,
                  tile_width, tile_height, tiling_strategy,
-                 upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0):
+                 upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64):
         self.params = scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise
         self.vae = vae
         self.tile_params = tile_width, tile_height, tiling_strategy
@@ -1912,6 +1970,7 @@ class PixelTiledKSampleUpscaler:
         self.tile_size = tile_size
         self.is_tiled = True
         self.tile_cnet_strength = tile_cnet_strength
+        self.overlap = overlap
 
     def tiled_ksample(self, latent, images):
         if "BNK_TiledKSampler" in nodes.NODE_CLASS_MAPPINGS:
@@ -1934,8 +1993,14 @@ class PixelTiledKSampleUpscaler:
                 preprocessor = nodes.NODE_CLASS_MAPPINGS['TilePreprocessor']()
                 # might add capacity to set pyrUp_iters later, not needed for now though
                 preprocessed = preprocessor.execute(images, pyrUp_iters=3, resolution=min(image_w, image_h))[0]
-                apply_cnet = getattr(nodes.ControlNetApply(), nodes.ControlNetApply.FUNCTION)
-                positive = apply_cnet(positive, self.tile_cnet, preprocessed, strength=self.tile_cnet_strength)[0]
+
+                positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive=positive,
+                                                                                      negative=negative,
+                                                                                      control_net=self.tile_cnet,
+                                                                                      image=preprocessed,
+                                                                                      strength=self.tile_cnet_strength,
+                                                                                      start_percent=0, end_percent=1.0,
+                                                                                      vae=self.vae)
 
         return TiledKSampler().sample(model, seed, tile_width, tile_height, tiling_strategy, steps, cfg, sampler_name,
                                       scheduler, positive, negative, latent, denoise)[0]

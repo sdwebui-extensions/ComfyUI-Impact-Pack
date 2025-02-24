@@ -14,6 +14,13 @@ from comfy.cli_args import args
 import math
 
 
+try:
+    from comfy_extras import nodes_differential_diffusion
+except Exception:
+    print(f"\n#############################################\n[Impact Pack] ComfyUI is an outdated version.\n#############################################\n")
+    raise Exception("[Impact Pack] ComfyUI is an outdated version.")
+
+
 class SEGSDetailer:
     @classmethod
     def INPUT_TYPES(s):
@@ -31,7 +38,7 @@ class SEGSDetailer:
                      "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
                      "noise_mask": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
                      "force_inpaint": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
-                     "basic_pipe": ("BASIC_PIPE",),
+                     "basic_pipe": ("BASIC_PIPE", {"tooltip": "If the `ImpactDummyInput` is connected to the model in the basic_pipe, the inference stage is skipped."}),
                      "refiner_ratio": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0}),
                      "batch_size": ("INT", {"default": 1, "min": 1, "max": 100}),
 
@@ -53,6 +60,8 @@ class SEGSDetailer:
 
     CATEGORY = "ImpactPack/Detailer"
 
+    DESCRIPTION = "This node enhances details by inpainting each region within the detected area bundle (SEGS) after enlarging them based on the guide size.\nThis node is applied specifically to SEGS rather than the entire image. To apply it to the entire image, use the 'SEGS Paste' node."
+
     @staticmethod
     def do_detail(image, segs, guide_size, guide_size_for, max_size, seed, steps, cfg, sampler_name, scheduler,
                   denoise, noise_mask, force_inpaint, basic_pipe, refiner_ratio=None, batch_size=1, cycle=1,
@@ -68,6 +77,9 @@ class SEGSDetailer:
 
         new_segs = []
         cnet_pil_list = []
+
+        if not (isinstance(model, str) and model == "DUMMY") and noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
+            model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
         for i in range(batch_size):
             seed += 1
@@ -103,13 +115,17 @@ class SEGSDetailer:
                     for condition, details in negative
                 ]
 
-                enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for, max_size,
-                                                                seg.bbox, seed, steps, cfg, sampler_name, scheduler,
-                                                                cropped_positive, cropped_negative, denoise, cropped_mask, force_inpaint,
-                                                                refiner_ratio=refiner_ratio, refiner_model=refiner_model,
-                                                                refiner_clip=refiner_clip, refiner_positive=refiner_positive, refiner_negative=refiner_negative,
-                                                                control_net_wrapper=seg.control_net_wrapper, cycle=cycle,
-                                                                inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func=scheduler_func_opt)
+                if not (isinstance(model, str) and model == "DUMMY"):
+                    enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for, max_size,
+                                                                    seg.bbox, seed, steps, cfg, sampler_name, scheduler,
+                                                                    cropped_positive, cropped_negative, denoise, cropped_mask, force_inpaint,
+                                                                    refiner_ratio=refiner_ratio, refiner_model=refiner_model,
+                                                                    refiner_clip=refiner_clip, refiner_positive=refiner_positive, refiner_negative=refiner_negative,
+                                                                    control_net_wrapper=seg.control_net_wrapper, cycle=cycle,
+                                                                    inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func=scheduler_func_opt)
+                else:
+                    enhanced_image = cropped_image
+                    cnet_pils = None
 
                 if cnet_pils is not None:
                     cnet_pil_list.extend(cnet_pils)
@@ -159,6 +175,8 @@ class SEGSPaste:
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Detailer"
+
+    DESCRIPTION = "This node provides a function to paste the enhanced SEGS, improved through the SEGS detailer, back onto the original image."
 
     @staticmethod
     def doit(image, segs, feather, alpha=255, ref_image_opt=None):
@@ -694,6 +712,68 @@ class SEGSToMaskBatch:
         return (mask_batch,)
 
 
+class SEGSMerge:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                     "segs": ("SEGS", ),
+                     },
+                }
+
+    RETURN_TYPES = ("SEGS",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "SEGS contains multiple SEGs. SEGS Merge integrates several SEGs into a single merged SEG. The label is changed to `merged` and the confidence becomes the minimum confidence. The applied controlnet and cropped_image are removed."
+
+    def doit(self, segs):
+        crop_left = sys.maxsize
+        crop_right = 0
+        crop_top = sys.maxsize
+        crop_bottom = 0
+
+        bbox_left = sys.maxsize
+        bbox_right = 0
+        bbox_top = sys.maxsize
+        bbox_bottom = 0
+
+        min_confidence = 1.0
+
+        for seg in segs[1]:
+            cx1 = seg.crop_region[0]
+            cy1 = seg.crop_region[1]
+            cx2 = seg.crop_region[2]
+            cy2 = seg.crop_region[3]
+
+            bx1 = seg.bbox[0]
+            by1 = seg.bbox[1]
+            bx2 = seg.bbox[2]
+            by2 = seg.bbox[3]
+
+            crop_left = min(crop_left, cx1)
+            crop_top = min(crop_top, cy1)
+            crop_right = max(crop_right, cx2)
+            crop_bottom = max(crop_bottom, cy2)
+
+            bbox_left = min(bbox_left, bx1)
+            bbox_top = min(bbox_top, by1)
+            bbox_right = max(bbox_right, bx2)
+            bbox_bottom = max(bbox_bottom, by2)
+
+            min_confidence = min(min_confidence, seg.confidence)
+        
+        combined_mask = core.segs_to_combined_mask(segs)
+        cropped_mask = combined_mask[crop_top:crop_bottom, crop_left:crop_right]
+        cropped_mask = cropped_mask.unsqueeze(0)
+
+        crop_region = [crop_left, crop_top, crop_right, crop_bottom]
+        bbox = [bbox_left, bbox_top, bbox_right, bbox_bottom]
+
+        seg = SEG(None, cropped_mask, min_confidence, crop_region, bbox, 'merged', None)
+        return ((segs[0], [seg]),)
+        
+
 class SEGSConcat:
     @classmethod
     def INPUT_TYPES(s):
@@ -824,7 +904,7 @@ class From_SEG_ELT_bbox:
     CATEGORY = "ImpactPack/Util"
 
     def doit(self, bbox):
-        return bbox
+        return [int(c) for c in bbox]
 
 
 class From_SEG_ELT_crop_region:
@@ -1029,10 +1109,10 @@ class SEG_ELT_BBOX_ScaleBy:
         x1, y1, x2, y2 = x1-cx1, y1-cy1, x2-cx1, y2-cy1
         h, w = mask.shape
 
-        x1 = min(w-1, max(0, x1))
-        x2 = min(w-1, max(0, x2))
-        y1 = min(h-1, max(0, y1))
-        y2 = min(h-1, max(0, y2))
+        x1 = int(min(w-1, max(0, x1)))
+        x2 = int(min(w-1, max(0, x2)))
+        y1 = int(min(h-1, max(0, y1)))
+        y2 = int(min(h-1, max(0, y2)))
 
         mask_cropped = mask.copy()
         mask_cropped[:, :x1] = 0  # zero fill left side
@@ -1290,6 +1370,8 @@ class ControlNetApplySEGS:
     RETURN_TYPES = ("SEGS",)
     FUNCTION = "doit"
 
+    DEPRECATED = True
+
     CATEGORY = "ImpactPack/Util"
 
     @staticmethod
@@ -1317,7 +1399,8 @@ class ControlNetApplyAdvancedSEGS:
                     },
                 "optional": {
                     "segs_preprocessor": ("SEGS_PREPROCESSOR",),
-                    "control_image": ("IMAGE",)
+                    "control_image": ("IMAGE",),
+                    "vae": ("VAE",)
                     }
                 }
 
@@ -1327,13 +1410,13 @@ class ControlNetApplyAdvancedSEGS:
     CATEGORY = "ImpactPack/Util"
 
     @staticmethod
-    def doit(segs, control_net, strength, start_percent, end_percent, segs_preprocessor=None, control_image=None):
+    def doit(segs, control_net, strength, start_percent, end_percent, segs_preprocessor=None, control_image=None, vae=None):
         new_segs = []
 
         for seg in segs[1]:
             control_net_wrapper = core.ControlNetAdvancedWrapper(control_net, strength, start_percent, end_percent, segs_preprocessor,
                                                                  seg.control_net_wrapper, original_size=segs[0], crop_region=seg.crop_region,
-                                                                 control_image=control_image)
+                                                                 control_image=control_image, vae=vae)
             new_seg = SEG(seg.cropped_image, seg.cropped_mask, seg.confidence, seg.crop_region, seg.bbox, seg.label, control_net_wrapper)
             new_segs.append(new_seg)
 
@@ -1403,11 +1486,11 @@ class SEGSPicker:
 
     RETURN_TYPES = ("SEGS", )
 
-    OUTPUT_NODE = True
-
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "This node provides a function to select only the chosen SEGS from the input SEGS."
 
     @staticmethod
     def doit(picks, segs, fallback_image_opt=None, unique_id=None):
@@ -1464,6 +1547,8 @@ class DefaultImageForSEGS:
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "If the SEGS have not passed through the detailer, they contain only detection area information without an image. This node sets a default image for the SEGS."
 
     @staticmethod
     def doit(segs, image, override):

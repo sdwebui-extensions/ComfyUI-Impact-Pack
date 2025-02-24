@@ -98,7 +98,7 @@ def img2img_segs(image, model, clip, vae, seed, steps, cfg, sampler_name, schedu
         noise_mask = tensor_gaussian_blur_mask(noise_mask, noise_mask_feather)
         noise_mask = noise_mask.squeeze(3)
 
-        if noise_mask_feather > 0:
+        if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
             model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
     if control_net_wrapper is not None:
@@ -106,7 +106,12 @@ def img2img_segs(image, model, clip, vae, seed, steps, cfg, sampler_name, schedu
 
     # prepare mask
     if noise_mask is not None and inpaint_model:
-        positive, negative, latent_image = nodes.InpaintModelConditioning().encode(positive, negative, image, vae, noise_mask)
+        imc_encode = nodes.InpaintModelConditioning().encode
+        if 'noise_mask' in inspect.signature(imc_encode).parameters:
+            positive, negative, latent_image = imc_encode(positive, negative, image, vae, mask=noise_mask, noise_mask=True)
+        else:
+            print(f"[Impact Pack] ComfyUI is an outdated version.")
+            positive, negative, latent_image = imc_encode(positive, negative, image, vae, noise_mask)
     else:
         latent_image = to_latent_image(image, vae)
         if noise_mask is not None:

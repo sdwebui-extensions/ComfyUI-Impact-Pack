@@ -13,7 +13,6 @@ import traceback
 
 comfy_path = os.path.dirname(folder_paths.__file__)
 impact_path = os.path.join(os.path.dirname(__file__))
-subpack_path = os.path.join(os.path.dirname(__file__), "impact_subpack")
 modules_path = os.path.join(os.path.dirname(__file__), "modules")
 
 sys.path.append(modules_path)
@@ -22,30 +21,9 @@ import impact.config
 import impact.sample_error_enhancer
 print(f"### Loading: ComfyUI-Impact-Pack ({impact.config.version})")
 
-
-def do_install():
-    import importlib
-    spec = importlib.util.spec_from_file_location('impact_install', os.path.join(os.path.dirname(__file__), 'install.py'))
-    impact_install = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(impact_install)
-
-
-# ensure dependency
-# if not os.path.exists(os.path.join(subpack_path, ".git")) and os.path.exists(subpack_path):
-#     print(f"### CompfyUI-Impact-Pack: corrupted subpack detected.")
-#     shutil.rmtree(subpack_path)
-
-# if impact.config.get_config()['dependency_version'] < impact.config.dependency_version or not os.path.exists(subpack_path):
-#     print(f"### ComfyUI-Impact-Pack: Updating dependencies [{impact.config.get_config()['dependency_version']} -> {impact.config.dependency_version}]")
-#     do_install()
-
-sys.path.append(subpack_path)
-
 # Core
 # recheck dependencies for colab
 try:
-    import impact.subpack_nodes  # This import must be done before cv2.
-
     import folder_paths
     import torch
     import cv2
@@ -63,10 +41,10 @@ try:
         import mmcv
         from mmdet.apis import (inference_detector, init_detector)
         from mmdet.evaluation import get_classes
-except:
-    import importlib
-    print("### ComfyUI-Impact-Pack: Reinstall dependencies (several dependencies are missing.)")
-    do_install()
+except Exception as e:
+    import logging
+    logging.error("[Impact Pack] Failed to import due to several dependencies are missing!!!!")
+    raise e
 
 
 import impact.impact_server  # to load server api
@@ -116,6 +94,7 @@ NODE_CLASS_MAPPINGS = {
     "FromDetailerPipe": FromDetailerPipe,
     "FromDetailerPipe_v2": FromDetailerPipe_v2,
     "FromDetailerPipeSDXL": FromDetailerPipe_SDXL,
+    "AnyPipeToBasic": AnyPipeToBasic,
     "ToBasicPipe": ToBasicPipe,
     "FromBasicPipe": FromBasicPipe,
     "FromBasicPipe_v2": FromBasicPipe_v2,
@@ -158,9 +137,12 @@ NODE_CLASS_MAPPINGS = {
     "BitwiseAndMask": BitwiseAndMask,
     "SubtractMask": SubtractMask,
     "AddMask": AddMask,
+    "MaskRectArea": MaskRectArea,
+    "MaskRectAreaAdvanced": MaskRectAreaAdvanced,
     "ImpactSegsAndMask": SegsBitwiseAndMask,
     "ImpactSegsAndMaskForEach": SegsBitwiseAndMaskForEach,
     "EmptySegs": EmptySEGS,
+    "ImpactFlattenMask": FlattenMask,
 
     "MediaPipeFaceMeshToSEGS": MediaPipeFaceMeshToSEGS,
     "MaskToSEGS": MaskToSEGS,
@@ -237,6 +219,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactSEGSConcat": SEGSConcat,
     "ImpactSEGSPicker": SEGSPicker,
     "ImpactMakeTileSEGS": MakeTileSEGS,
+    "ImpactSEGSMerge": SEGSMerge,
 
     "SEGSDetailerForAnimateDiff": SEGSDetailerForAnimateDiff,
 
@@ -249,6 +232,9 @@ NODE_CLASS_MAPPINGS = {
     "ImpactImageBatchToImageList": ImageBatchToImageList,
     "ImpactMakeImageList": MakeImageList,
     "ImpactMakeImageBatch": MakeImageBatch,
+    "ImpactMakeAnyList": MakeAnyList,
+    "ImpactMakeMaskList": MakeMaskList,
+    "ImpactMakeMaskBatch": MakeMaskBatch,
 
     "RegionalSampler": RegionalSampler,
     "RegionalSamplerAdvanced": RegionalSamplerAdvanced,
@@ -271,6 +257,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactLogicalOperators": ImpactLogicalOperators,
     "ImpactInt": ImpactInt,
     "ImpactFloat": ImpactFloat,
+    "ImpactBoolean": ImpactBoolean,
     "ImpactValueSender": ImpactValueSender,
     "ImpactValueReceiver": ImpactValueReceiver,
     "ImpactImageInfo": ImpactImageInfo,
@@ -282,6 +269,7 @@ NODE_CLASS_MAPPINGS = {
     "StringListToString": StringListToString,
     "WildcardPromptFromString": WildcardPromptFromString,
     "ImpactExecutionOrderController": ImpactExecutionOrderController,
+    "ImpactListBridge": ImpactListBridge,
 
     "RemoveNoiseMask": RemoveNoiseMask,
 
@@ -315,8 +303,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSimpleDetectorSEGS_for_AD": "Simple Detector for AnimateDiff (SEGS)",
     "ImpactSimpleDetectorSEGS": "Simple Detector (SEGS)",
     "ImpactSimpleDetectorSEGSPipe": "Simple Detector (SEGS/pipe)",
-    "ImpactControlNetApplySEGS": "ControlNetApply (SEGS)",
-    "ImpactControlNetApplyAdvancedSEGS": "ControlNetApplyAdvanced (SEGS)",
+    "ImpactControlNetApplySEGS": "ControlNetApply (SEGS) - DEPRECATED",
+    "ImpactControlNetApplyAdvancedSEGS": "ControlNetApply (SEGS)",
     "ImpactIPAdapterApplySEGS": "IPAdapterApply (SEGS)",
 
     "BboxDetectorCombined_v2": "BBOX Detector (combined)",
@@ -332,6 +320,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BitwiseAndMask": "Pixelwise(MASK & MASK)",
     "SubtractMask": "Pixelwise(MASK - MASK)",
     "AddMask": "Pixelwise(MASK + MASK)",
+    "MaskRectArea": "Mask Rect Area",
+    "MaskRectAreaAdvanced": "Mask Rect Area (Advanced)",
+    "ImpactFlattenMask": "Flatten Mask Batch",
     "DetailerForEach": "Detailer (SEGS)",
     "DetailerForEachPipe": "Detailer (SEGS/pipe)",
     "DetailerForEachDebug": "DetailerDebug (SEGS)",
@@ -354,6 +345,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DetailerPipeToBasicPipe": "DetailerPipe -> BasicPipe",
     "EditBasicPipe": "Edit BasicPipe",
     "EditDetailerPipe": "Edit DetailerPipe",
+    "AnyPipeToBasic": "Any PIPE -> BasicPipe",
 
     "LatentPixelScale": "Latent Scale (on Pixel Space)",
     "IterativeLatentUpscale": "Iterative Upscale (Latent/on Pixel Space)",
@@ -376,6 +368,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSEGSToMaskBatch": "SEGS to Mask Batch",
     "ImpactSEGSPicker": "Picker (SEGS)",
     "ImpactMakeTileSEGS": "Make Tile SEGS",
+    "ImpactSEGSMerge": "SEGS Merge",
 
     "ImpactDecomposeSEGS": "Decompose (SEGS)",
     "ImpactAssembleSEGS": "Assemble (SEGS)",
@@ -399,13 +392,19 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSwitch": "Switch (Any)",
     "ImpactInversedSwitch": "Inversed Switch (Any)",
     "ImpactExecutionOrderController": "Execution Order Controller",
+    "ImpactListBridge": "List Bridge",
 
-    "MasksToMaskList": "Masks to Mask List",
-    "MaskListToMaskBatch": "Mask List to Masks",
-    "ImpactImageBatchToImageList": "Image batch to Image List",
+    "MasksToMaskList": "Mask Batch to Mask List",
+    "MaskListToMaskBatch": "Mask List to Mask Batch",
+    "ImpactImageBatchToImageList": "Image Batch to Image List",
     "ImageListToImageBatch": "Image List to Image Batch",
+
     "ImpactMakeImageList": "Make Image List",
     "ImpactMakeImageBatch": "Make Image Batch",
+    "ImpactMakeMaskList": "Make Mask List",
+    "ImpactMakeMaskBatch": "Make Mask Batch",
+    "ImpactMakeAnyList": "Make List (Any)",
+
     "ImpactStringSelector": "String Selector",
     "StringListToString": "String List to String",
     "WildcardPromptFromString": "Wildcard Prompt from String",
@@ -464,19 +463,6 @@ if not impact.config.get_config()['mmdet_skip']:
         "SegmDetectorCombined": "SegmDetectorCombined (Legacy)",
     })
 
-try:
-    import impact.subpack_nodes
-
-    NODE_CLASS_MAPPINGS.update(impact.subpack_nodes.NODE_CLASS_MAPPINGS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(impact.subpack_nodes.NODE_DISPLAY_NAME_MAPPINGS)
-except Exception as e:
-    print("### ComfyUI-Impact-Pack: (IMPORT FAILED) Subpack\n")
-    print("  The module at the `custom_nodes/ComfyUI-Impact-Pack/impact_subpack` path appears to be incomplete.")
-    print("  Recommended to delete the path and restart ComfyUI.")
-    print("  If the issue persists, please report it to https://github.com/ltdrdata/ComfyUI-Impact-Pack/issues.")
-    print("\n---------------------------------")
-    traceback.print_exc()
-    print("---------------------------------\n")
 
 # NOTE:  Inject directly into EXTENSION_WEB_DIRS instead of WEB_DIRECTORY
 #        Provide the js path fixed as ComfyUI-Impact-Pack instead of the path name, making it available for external use

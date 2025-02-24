@@ -272,6 +272,24 @@ class ImpactFloat:
         return (value, )
 
 
+class ImpactBoolean:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "value": ("BOOLEAN", {"default": False}),
+            },
+        }
+
+    FUNCTION = "doit"
+    CATEGORY = "ImpactPack/Logic"
+
+    RETURN_TYPES = ("BOOLEAN", )
+
+    def doit(self, value):
+        return (value, )
+
+
 class ImpactValueSender:
     @classmethod
     def INPUT_TYPES(cls):
@@ -673,7 +691,7 @@ class ImpactControlBridge:
     def doit(self, value, mode, behavior="Stop", unique_id=None, prompt=None, extra_pnginfo=None):
         global error_skip_flag
 
-        if core.is_execution_model_version_supported:
+        if core.is_execution_model_version_supported():
             from comfy_execution.graph import ExecutionBlocker
         else:
             print("[Impact Pack] ImpactControlBridge: ComfyUI is outdated. The 'Stop' behavior cannot function properly.")
@@ -746,6 +764,29 @@ class ImpactExecutionOrderController:
 
     def doit(self, signal, value):
         return signal, value
+
+
+class ImpactListBridge:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+                    "list_input": (any_typ,),
+                    }}
+
+    FUNCTION = "doit"
+
+    DESCRIPTION = "When passing the list output through this node, it collects and organizes the data before forwarding it, which ensures that the previous stage's sub-workflow has been completed."
+
+    CATEGORY = "ImpactPack/Util"
+    RETURN_TYPES = (any_typ, )
+    RETURN_NAMES = ("list_output", )
+
+    INPUT_IS_LIST = True
+    OUTPUT_IS_LIST = (True, )
+
+    @staticmethod
+    def doit(list_input):
+        return (list_input,)
 
 
 original_handle_execution = execution.PromptExecutor.handle_execution_error

@@ -93,7 +93,7 @@ const input_dirty = {};
 const output_tracking = {};
 
 function progressExecuteHandler(event) {
-	if(event.detail.output.aux){
+	if(event.detail?.output?.aux){
 		const id = event.detail.node;
 		if(input_tracking.hasOwnProperty(id)) {
 			if(input_tracking.hasOwnProperty(id) && input_tracking[id][0] != event.detail.output.aux[0]) {
@@ -222,6 +222,31 @@ api.addEventListener("executed", progressExecuteHandler);
 
 app.registerExtension({
 	name: "Comfy.Impack",
+
+    commands: [
+      {
+        id: 'refresh-impact-wildcard',
+        label: 'Impact: Refresh Wildcard',
+        function: async () => {
+        	await api.fetchApi('/impact/wildcards/refresh');
+        	await load_wildcards();
+        	app.extensionManager.toast.add({
+				severity: 'info',
+				summary: 'Refreshed!',
+				detail: 'Impact Wildcard List is refreshed!!',
+				life: 3000
+			});
+        }
+      }
+    ],
+
+    menuCommands: [
+      {
+        path: ['Edit'],
+        commands: ['refresh-impact-wildcard']
+      }
+    ],
+
 	loadedGraphNode(node, app) {
 		if (node.comfyClass == "MaskPainter") {
 			input_dirty[node.id + ""] = true;
@@ -237,7 +262,7 @@ app.registerExtension({
 		if(nodeData.name == "ImpactControlBridge") {
 			const onConnectionsChange = nodeType.prototype.onConnectionsChange;
 			nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
-				if(!link_info || this.inputs[0].type != '*')
+				if(index != 0 || !link_info || this.inputs[0].type != '*')
 					return;
 
 				// assign type
@@ -248,7 +273,7 @@ app.registerExtension({
 				}
 				else {
 					const node = app.graph.getNodeById(link_info.origin_id);
-					slot_type = node.outputs[link_info.origin_slot].type;
+					slot_type = node.outputs[link_info.origin_slot]?.type;
 				}
 
 				this.inputs[0].type = slot_type;
@@ -340,7 +365,11 @@ app.registerExtension({
 					// connect input
 					if(this.inputs[0].type == '*'){
 						const node = app.graph.getNodeById(link_info.origin_id);
-						let origin_type = node.outputs[link_info.origin_slot].type;
+						let origin_type = node.outputs[link_info.origin_slot]?.type;
+
+						if(origin_type==undefined) {
+							return; // fallback
+						}
 
 						if(origin_type == '*') {
 							this.disconnectInput(link_info.target_slot);
@@ -353,7 +382,7 @@ app.registerExtension({
 						}
 
 						this.outputs[0].type = origin_type;
-						this.outputs[0].name = origin_type;
+						this.outputs[0].name = 'output1';
 					}
 
 					return;
@@ -383,7 +412,7 @@ app.registerExtension({
 				}
 
 				let select_slot = this.inputs.find(x => x.name == "select");
-				if(this.widgets) {
+				if(this.widgets?.length) {
 					this.widgets[0].options.max = select_slot?this.outputs.length-1:this.outputs.length;
 					this.widgets[0].value = Math.min(this.widgets[0].value, this.widgets[0].options.max);
 					if(this.widgets[0].options.max > 0 && this.widgets[0].value == 0)
@@ -393,7 +422,8 @@ app.registerExtension({
 		}
 
 		if (nodeData.name === 'ImpactMakeImageList' || nodeData.name === 'ImpactMakeImageBatch' ||
-			nodeData.name === 'CombineRegionalPrompts' ||
+		    nodeData.name === 'ImpactMakeMaskList' || nodeData.name === 'ImpactMakeMaskBatch' ||
+			nodeData.name === 'ImpactMakeAnyList' || nodeData.name === 'CombineRegionalPrompts' ||
 			nodeData.name === 'ImpactCombineConditionings' || nodeData.name === 'ImpactConcatConditionings' ||
 			nodeData.name === 'ImpactSEGSConcat' ||
 			nodeData.name === 'ImpactSwitch' || nodeData.name === 'LatentSwitch' || nodeData.name == 'SEGSSwitch') {
@@ -403,6 +433,15 @@ app.registerExtension({
 			case 'ImpactMakeImageList':
 			case 'ImpactMakeImageBatch':
 				input_name = "image";
+				break;
+
+			case 'ImpactMakeMaskList':
+			case 'ImpactMakeMaskBatch':
+				input_name = "mask";
+				break;
+
+			case 'ImpactMakeAnyList':
+				input_name = "value";
 				break;
 
 			case 'ImpactSEGSConcat':
@@ -473,8 +512,12 @@ app.registerExtension({
 
 					if(this.inputs[0].type == '*'){
 						const node = app.graph.getNodeById(link_info.origin_id);
-						let origin_type = node.outputs[link_info.origin_slot].type;
-
+						let origin_type = node.outputs[link_info.origin_slot]?.type;
+						if(link_info.target_slot == 0 && this.inputs.length > 1) {
+								origin_type = this.inputs[1].type;
+								node.connect(link_info.origin_slot, node.id, 'input1');
+						}
+						
 						if(origin_type == '*') {
 							this.disconnectInput(link_info.target_slot);
 							return;
@@ -527,7 +570,7 @@ app.registerExtension({
 						this.addInput(`${input_name}${slot_i}`, this.outputs[0].type);
 				}
 
-				if(this.widgets) {
+				if(this.widgets?.length) {
 					this.widgets[0].options.max = select_slot?this.inputs.length-1:this.inputs.length;
 					this.widgets[0].value = Math.min(this.widgets[0].value, this.widgets[0].options.max);
 					if(this.widgets[0].options.max > 0 && this.widgets[0].value == 0)
@@ -573,17 +616,17 @@ app.registerExtension({
 		}
 
 		if(node.comfyClass == "ImpactSEGSLabelFilter" || node.comfyClass == "SEGSLabelFilterDetailerHookProvider") {
+			node.widgets[0].callback = (value, canvas, node, pos, e) => {
+				if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
+					node.widgets[1].value += ", "
+
+				node.widgets[1].value += value;
+				if(node.widgets_values)
+					node.widgets_values[1] = node.widgets[1].value;
+			}
+
 			Object.defineProperty(node.widgets[0], "value", {
 				set: (value) => {
-						const stackTrace = new Error().stack;
-						if(stackTrace.includes('inner_value_change')) {
-							if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
-								node.widgets[1].value += ", "
-
-							node.widgets[1].value += value;
-							node.widgets_values[1] = node.widgets[1].value;
-						}
-
 						node._value = value;
 					},
 				get: () => {
@@ -653,18 +696,18 @@ app.registerExtension({
 					break;
 			}
 
+            node.widgets[combo_id+1].callback = (value, canvas, node, pos, e) => {
+                    if(node.widgets[tbox_id].value != '')
+                        node.widgets[tbox_id].value += ', '
+
+                    node.widgets[tbox_id].value += node._wildcard_value;
+            }
+
 			Object.defineProperty(node.widgets[combo_id+1], "value", {
 				set: (value) => {
-						const stackTrace = new Error().stack;
-						if(stackTrace.includes('inner_value_change')) {
-							if(value != "Select the Wildcard to add to the text") {
-								if(node.widgets[tbox_id].value != '')
-									node.widgets[tbox_id].value += ', '
-
-								node.widgets[tbox_id].value += value;
-							}
-						}
-					},
+                    if (value !== "Select the Wildcard to add to the text")
+                        node._wildcard_value = value;
+                },
 				get: () => { return "Select the Wildcard to add to the text"; }
 			});
 
@@ -676,24 +719,22 @@ app.registerExtension({
 			});
 
 			if(has_lora) {
+				node.widgets[combo_id].callback = (value, canvas, node, pos, e) => {
+					let lora_name = node._value;
+					if(lora_name.endsWith('.safetensors')) {
+						lora_name = lora_name.slice(0, -12);
+					}
+
+					node.widgets[tbox_id].value += `<lora:${lora_name}>`;
+					if(node.widgets_values) {
+						node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
+					}
+				}
+
 				Object.defineProperty(node.widgets[combo_id], "value", {
 					set: (value) => {
-							const stackTrace = new Error().stack;
-							if(stackTrace.includes('inner_value_change')) {
-								if(value != "Select the LoRA to add to the text") {
-									let lora_name = value;
-									if (lora_name.endsWith('.safetensors')) {
-										lora_name = lora_name.slice(0, -12);
-									}
-
-									node.widgets[tbox_id].value += `<lora:${lora_name}>`;
-									if(node.widgets_values) {
-										node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
-									}
-								}
-							}
-
-							node._value = value;
+							if (value !== "Select the LoRA to add to the text")
+								node._value = value;
 						},
 
 					get: () => { return "Select the LoRA to add to the text"; }
@@ -718,14 +759,20 @@ app.registerExtension({
 			// mode combo
 			Object.defineProperty(mode_widget, "value", {
 				set: (value) => {
-						node._mode_value = value == true || value == "Populate";
-						populated_text_widget.inputEl.disabled = value == true || value == "Populate";
+						if(value == true)
+							node._mode_value = "populate";
+						else if(value == false)
+							node._mode_value = "fixed";
+						else
+							node._mode_value = value; // combo value
+
+						populated_text_widget.inputEl.disabled = node._mode_value == 'populate';
 					},
 				get: () => {
 						if(node._mode_value != undefined)
 							return node._mode_value;
 						else
-							return true;
+							return 'populate';
 					 }
 			});
 		}

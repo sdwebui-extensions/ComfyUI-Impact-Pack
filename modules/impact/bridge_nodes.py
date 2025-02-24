@@ -19,6 +19,10 @@ class PreviewBridge:
                     "images": ("IMAGE",),
                     "image": ("STRING", {"default": ""}),
                     },
+                "optional": {
+                    "block": ("BOOLEAN", {"default": False, "label_on": "if_empty_mask", "label_off": "never", "tooltip": "is_empty_mask: If the mask is empty, the execution is stopped.\nnever: The execution is never stopped."}),
+                    "restore_mask": (["never", "always", "if_same_size"], {"tooltip": "if_same_size: If the changed input image is the same size as the previous image, restore using the last saved mask\nalways: Whenever the input image changes, always restore using the last saved mask\nnever: Do not restore the mask.\n`restore_mask` has higher priority than `block`"}),
+                    },
                 "hidden": {"unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
 
@@ -29,6 +33,8 @@ class PreviewBridge:
     OUTPUT_NODE = True
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "This is a feature that allows you to edit and send a Mask over a image.\nIf the block is set to 'is_empty_mask', the execution is stopped when the mask is empty."
 
     def __init__(self):
         super().__init__()
@@ -70,7 +76,7 @@ class PreviewBridge:
 
         return image, mask.unsqueeze(0), ui_item
 
-    def doit(self, images, image, unique_id, prompt=None, extra_pnginfo=None):
+    def doit(self, images, image, unique_id, block=False, restore_mask="never", prompt=None, extra_pnginfo=None):
         need_refresh = False
 
         if unique_id not in core.preview_bridge_cache:
@@ -83,10 +89,25 @@ class PreviewBridge:
             pixels, mask, path_item = PreviewBridge.load_image(image)
             image = [path_item]
         else:
-            res = nodes.PreviewImage().save_images(images, filename_prefix="PreviewBridge/PB-", prompt=prompt, extra_pnginfo=extra_pnginfo)
+            if restore_mask != "never":
+                mask = core.preview_bridge_last_mask_cache.get(unique_id)
+                if mask is None or (restore_mask != "always" and mask.shape[1:] != images.shape[1:3]):
+                    mask = None
+            else:
+                mask = None
+
+            if mask is None:
+                mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
+                res = nodes.PreviewImage().save_images(images, filename_prefix="PreviewBridge/PB-", prompt=prompt, extra_pnginfo=extra_pnginfo)
+            else:
+                masked_images = tensor_convert_rgba(images)
+                resized_mask = resize_mask(mask, (images.shape[1], images.shape[2])).unsqueeze(3)
+                resized_mask = 1 - resized_mask
+                tensor_putalpha(masked_images, resized_mask)
+                res = nodes.PreviewImage().save_images(masked_images, filename_prefix="PreviewBridge/PB-", prompt=prompt, extra_pnginfo=extra_pnginfo)
+
             image2 = res['ui']['images']
             pixels = images
-            mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
 
             path = os.path.join(folder_paths.get_temp_directory(), 'PreviewBridge', image2[0]['filename'])
             core.set_previewbridge_image(unique_id, path, image2[0])
@@ -96,9 +117,23 @@ class PreviewBridge:
 
             image = image2
 
+        is_empty_mask = torch.all(mask == 0)
+
+        if block and is_empty_mask and core.is_execution_model_version_supported():
+            from comfy_execution.graph import ExecutionBlocker
+            result = ExecutionBlocker(None), ExecutionBlocker(None)
+        elif block and is_empty_mask:
+            print(f"[Impact Pack] PreviewBridge: ComfyUI is outdated - blocking feature is disabled.")
+            result = pixels, mask
+        else:
+            result = pixels, mask
+
+        if not is_empty_mask:
+            core.preview_bridge_last_mask_cache[unique_id] = mask
+
         return {
             "ui": {"images": image},
-            "result": (pixels, mask, ),
+            "result": result,
         }
 
 
@@ -151,6 +186,9 @@ def decode_latent(latent, preview_method, vae_opt=None):
     elif preview_method == "Latent2RGB-FLUX.1":
         latent_format = latent_formats.Flux()
         method = LatentPreviewMethod.Latent2RGB
+    elif preview_method == "Latent2RGB-LTXV":
+        latent_format = latent_formats.LTXV()
+        method = LatentPreviewMethod.Latent2RGB
     else:
         print(f"[Impact Pack] PreviewBridgeLatent: '{preview_method}' is unsupported preview method.")
         latent_format = latent_formats.SD15()
@@ -176,10 +214,13 @@ class PreviewBridgeLatent:
                                         "Latent2RGB-SDXL", "Latent2RGB-SD15", "Latent2RGB-SD3",
                                         "Latent2RGB-SD-X4", "Latent2RGB-Playground-2.5",
                                         "Latent2RGB-SC-Prior", "Latent2RGB-SC-B",
+                                        "Latent2RGB-LTXV",
                                         "TAEF1", "TAESDXL", "TAESD15", "TAESD3"],),
                     },
                 "optional": {
-                    "vae_opt": ("VAE", )
+                    "vae_opt": ("VAE", ),
+                    "block": ("BOOLEAN", {"default": False, "label_on": "if_empty_mask", "label_off": "never", "tooltip": "is_empty_mask: If the mask is empty, the execution is stopped.\nnever: The execution is never stopped. Instead, it returns a white mask."}),
+                    "restore_mask": (["never", "always", "if_same_size"], {"tooltip": "if_same_size: If the changed input latent is the same size as the previous latent, restore using the last saved mask\nalways: Whenever the input latent changes, always restore using the last saved mask\nnever: Do not restore the mask.\n`restore_mask` has higher priority than `block`\nIf the input latent already has a mask, do not restore mask."}),
                 },
                 "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
@@ -191,6 +232,8 @@ class PreviewBridgeLatent:
     OUTPUT_NODE = True
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "This is a feature that allows you to edit and send a Mask over a latent image.\nIf the block is set to 'is_empty_mask', the execution is stopped when the mask is empty."
 
     def __init__(self):
         super().__init__()
@@ -233,9 +276,15 @@ class PreviewBridgeLatent:
 
         return image, mask, ui_item
 
-    def doit(self, latent, image, preview_method, vae_opt=None, unique_id=None, prompt=None, extra_pnginfo=None):
+    def doit(self, latent, image, preview_method, vae_opt=None, block=False, unique_id=None, restore_mask='never', prompt=None, extra_pnginfo=None):
         latent_channels = latent['samples'].shape[1]
-        preview_method_channels = 16 if 'SD3' in preview_method or 'SC-Prior' in preview_method or 'FLUX.1' in preview_method or 'TAEF1' == preview_method else 4
+
+        if 'SD3' in preview_method or 'SC-Prior' in preview_method or 'FLUX.1' in preview_method or 'TAEF1' == preview_method:
+            preview_method_channels = 16
+        elif 'LTXV' in preview_method:
+            preview_method_channels = 128
+        else:
+            preview_method_channels = 4
 
         if vae_opt is None and latent_channels != preview_method_channels:
             print(f"[PreviewBridgeLatent] The version of latent is not compatible with preview_method.\nSD3, SD1/SD2, SDXL, SC-Prior, SC-B and FLUX.1 are not compatible with each other.")
@@ -262,9 +311,13 @@ class PreviewBridgeLatent:
                     del res_latent['noise_mask']
                 else:
                     res_latent = latent
+
+                is_empty_mask = True
             else:
                 res_latent = latent.copy()
                 res_latent['noise_mask'] = mask
+
+                is_empty_mask = torch.all(mask == 1)
 
             res_image = [path_item]
         else:
@@ -287,10 +340,29 @@ class PreviewBridgeLatent:
                                 'subfolder': 'PreviewBridge',
                                 'type': 'temp',
                             }]
+
+                is_empty_mask = False
             else:
-                mask = torch.ones(latent['samples'].shape[2:], dtype=torch.float32, device="cpu").unsqueeze(0)
-                res = nodes.PreviewImage().save_images(decoded_image, filename_prefix="PreviewBridge/PBL-", prompt=prompt, extra_pnginfo=extra_pnginfo)
+                if restore_mask != "never":
+                    mask = core.preview_bridge_last_mask_cache.get(unique_id)
+                    if mask is None or (restore_mask != "always" and mask.shape[1:] != decoded_image.shape[1:3]):
+                        mask = None
+                else:
+                    mask = None
+
+                if mask is None:
+                    mask = torch.ones(latent['samples'].shape[2:], dtype=torch.float32, device="cpu").unsqueeze(0)
+                    res = nodes.PreviewImage().save_images(decoded_image, filename_prefix="PreviewBridge/PBL-", prompt=prompt, extra_pnginfo=extra_pnginfo)
+                else:
+                    masked_images = tensor_convert_rgba(decoded_image)
+                    resized_mask = resize_mask(mask, (decoded_image.shape[1], decoded_image.shape[2])).unsqueeze(3)
+                    resized_mask = 1 - resized_mask
+                    tensor_putalpha(masked_images, resized_mask)
+                    res = nodes.PreviewImage().save_images(masked_images, filename_prefix="PreviewBridge/PBL-", prompt=prompt, extra_pnginfo=extra_pnginfo)
+
                 res_image = res['ui']['images']
+
+            is_empty_mask = torch.all(mask == 1)
 
             path = os.path.join(folder_paths.get_temp_directory(), 'PreviewBridge', res_image[0]['filename'])
             core.set_previewbridge_image(unique_id, path, res_image[0])
@@ -300,7 +372,19 @@ class PreviewBridgeLatent:
 
             res_latent = latent
 
+        if block and is_empty_mask and core.is_execution_model_version_supported():
+            from comfy_execution.graph import ExecutionBlocker
+            result = ExecutionBlocker(None), ExecutionBlocker(None)
+        elif block and is_empty_mask:
+            print(f"[Impact Pack] PreviewBridgeLatent: ComfyUI is outdated - blocking feature is disabled.")
+            result = res_latent, mask
+        else:
+            result = res_latent, mask
+
+        if not is_empty_mask:
+            core.preview_bridge_last_mask_cache[unique_id] = mask
+
         return {
             "ui": {"images": res_image},
-            "result": (res_latent, mask, ),
+            "result": result,
         }

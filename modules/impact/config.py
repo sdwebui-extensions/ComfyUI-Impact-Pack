@@ -1,10 +1,10 @@
 import configparser
 import os
 
-version_code = [7, 3, 1]
+version_code = [8, 8, 1]
 version = f"V{version_code[0]}.{version_code[1]}" + (f'.{version_code[2]}' if len(version_code) > 2 else '')
 
-dependency_version = 22
+dependency_version = 24
 
 my_path = os.path.dirname(__file__)
 old_config_path = os.path.join(my_path, "impact-pack.ini")
