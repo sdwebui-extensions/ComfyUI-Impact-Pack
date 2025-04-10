@@ -18,7 +18,6 @@ modules_path = os.path.join(os.path.dirname(__file__), "modules")
 sys.path.append(modules_path)
 
 import impact.config
-import impact.sample_error_enhancer
 print(f"### Loading: ComfyUI-Impact-Pack ({impact.config.version})")
 
 # Core
@@ -248,6 +247,8 @@ NODE_CLASS_MAPPINGS = {
     "ImpactSEGSLabelFilter": SEGSLabelFilter,
     "ImpactSEGSRangeFilter": SEGSRangeFilter,
     "ImpactSEGSOrderedFilter": SEGSOrderedFilter,
+    "ImpactSEGSIntersectionFilter": SEGSIntersectionFilter,
+    "ImpactSEGSNMSFilter": SEGSNMSFilter,
 
     "ImpactCompare": ImpactCompare,
     "ImpactConditionalBranch": ImpactConditionalBranch,
@@ -363,6 +364,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSEGSLabelFilter": "SEGS Filter (label)",
     "ImpactSEGSRangeFilter": "SEGS Filter (range)",
     "ImpactSEGSOrderedFilter": "SEGS Filter (ordered)",
+    "ImpactSEGSIntersectionFilter": "SEGS Filter (intersection)",
+    "ImpactSEGSNMSFilter": "SEGS Filter (non max suppression)",
     "ImpactSEGSConcat": "SEGS Concat",
     "ImpactSEGSToMaskList": "SEGS to Mask List",
     "ImpactSEGSToMaskBatch": "SEGS to Mask Batch",

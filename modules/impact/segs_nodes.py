@@ -13,6 +13,7 @@ from . import segs_upscaler
 from comfy.cli_args import args
 import math
 
+from typing import Callable, Union
 
 try:
     from comfy_extras import nodes_differential_diffusion
@@ -504,7 +505,7 @@ class SEGSOrderedFilter:
     def INPUT_TYPES(s):
         return {"required": {
                         "segs": ("SEGS", ),
-                        "target": (["area(=w*h)", "width", "height", "x1", "y1", "x2", "y2", "confidence"],),
+                        "target": (["area(=w*h)", "width", "height", "x1", "y1", "x2", "y2", "confidence", "none"],),
                         "order": ("BOOLEAN", {"default": True, "label_on": "descending", "label_off": "ascending"}),
                         "take_start": ("INT", {"default": 0, "min": 0, "max": sys.maxsize, "step": 1}),
                         "take_count": ("INT", {"default": 1, "min": 0, "max": sys.maxsize, "step": 1}),
@@ -517,51 +518,35 @@ class SEGSOrderedFilter:
 
     CATEGORY = "ImpactPack/Util"
 
+    @staticmethod
+    def get_sort_key_fn(target: str) -> Union[Callable, None]:
+        if target == "none":
+            return None
+                
+        def sort_key_fn(seg):
+            x1, y1, x2, y2 = seg.crop_region
+            if target == "confidence": return seg.confidence
+            if target == "area(=w*h)": return (x2 - x1) * (y2 - y1)
+            if target == "width": return x2 - x1
+            if target == "height": return y2 - y1
+            if target == "x1": return x1
+            if target == "y1": return y1
+            if target == "x2": return x2
+            if target == "y2": return y2
+            raise Exception(f"[Impact Pack] SEGSOrderedFilter - Unexpected target '{target}'")
+                
+        return sort_key_fn
+
     def doit(self, segs, target, order, take_start, take_count):
-        segs_with_order = []
+        sort_key_fn = SEGSOrderedFilter.get_sort_key_fn(target)
 
-        for seg in segs[1]:
-            x1 = seg.crop_region[0]
-            y1 = seg.crop_region[1]
-            x2 = seg.crop_region[2]
-            y2 = seg.crop_region[3]
+        sorted_list = list(segs[1]) # make a shallow copy, so it does not mutate the original list when sort
+        if sort_key_fn is not None:
+            sorted_list.sort(key=sort_key_fn, reverse=order)
 
-            if target == "area(=w*h)":
-                value = (y2 - y1) * (x2 - x1)
-            elif target == "width":
-                value = x2 - x1
-            elif target == "height":
-                value = y2 - y1
-            elif target == "x1":
-                value = x1
-            elif target == "x2":
-                value = x2
-            elif target == "y1":
-                value = y1
-            elif target == "y2":
-                value = y2
-            elif target == "confidence":
-                value = seg.confidence
-            else:
-                raise Exception(f"[Impact Pack] SEGSOrderedFilter - Unexpected target '{target}'")
-
-            segs_with_order.append((value, seg))
-
-        if order:
-            sorted_list = sorted(segs_with_order, key=lambda x: x[0], reverse=True)
-        else:
-            sorted_list = sorted(segs_with_order, key=lambda x: x[0], reverse=False)
-
-        result_list = []
-        remained_list = []
-
-        for i, item in enumerate(sorted_list):
-            if take_start <= i < take_start + take_count:
-                result_list.append(item[1])
-            else:
-                remained_list.append(item[1])
-
-        return (segs[0], result_list), (segs[0], remained_list),
+        take_stop = take_start + take_count
+        return (segs[0], sorted_list[take_start:take_stop]), \
+            (segs[0], sorted_list[:take_start] + sorted_list[take_stop:]),
 
 
 class SEGSRangeFilter:
@@ -627,6 +612,111 @@ class SEGSRangeFilter:
                 print(f"[filter] value={value} / {mode}, {min_value}, {max_value}")
 
         return (segs[0], new_segs), (segs[0], remained_segs),
+
+
+class SEGSIntersectionFilter:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                        "segs1": ("SEGS", ),
+                        "segs2": ("SEGS", ),
+                        "ioa_threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+                     },
+                }
+
+    RETURN_TYPES = ("SEGS",)
+    RETURN_NAMES = ("filtered_SEGS",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    def compute_ioa(self, mask1, mask2):
+        """Compute Intersection over Area (IoA) between two boxes."""
+        inter_mask = utils.bitwise_and_masks(mask1, mask2)
+        
+        inter_area = (inter_mask > 0).sum()
+        area1 = (mask1 > 0).sum()
+
+        return inter_area / area1 if area1 > 0 else 0
+
+    def doit(self, segs1, segs2, ioa_threshold):
+        """Remove segments from segs1 if their IoA with any segment in segs2 exceeds the threshold."""
+        # Extract bounding boxes for all segments in segs1 and segs2
+        keep = []
+
+        # Iterate over all segments in segs1
+        for idx1, seg1 in enumerate(segs1[1]):
+            keep_segment = True  # Assume the segment should be kept
+            mask1 = core.segs_to_combined_mask((segs1[0], [seg1]))
+
+            # Compare with every segment in segs2
+            for seg2 in segs2[1]:
+                mask2 = core.segs_to_combined_mask((segs2[0], [seg2]))
+                ioa = self.compute_ioa(mask1, mask2)  # IoA between segment 1 and segment 2
+                
+                if ioa > ioa_threshold:  # If IoA exceeds the threshold, mark the segment for removal
+                    keep_segment = False
+                    break  # If one overlap exceeds threshold, break early and mark for removal
+
+            # Keep the segment if it did not exceed the threshold with any other segment
+            if keep_segment:
+                keep.append(segs1[1][idx1])
+
+        return (segs1[0], keep),  # Return the updated SEGS
+
+
+class SEGSNMSFilter:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "segs": ("SEGS",),
+                "iou_threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+            },
+        }
+
+    RETURN_TYPES = ("SEGS",)
+    RETURN_NAMES = ("filtered_SEGS",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    def compute_iou(self, mask1, mask2):
+        """Compute IoU between two bounding boxes (x1, y1, x2, y2)."""
+        inter_mask = utils.bitwise_and_masks(mask1, mask2)
+        union_mask = utils.add_masks(mask1, mask2)
+        
+        inter_area = (inter_mask > 0).sum()
+        union_area = (union_mask > 0).sum()
+
+        return inter_area / union_area if union_area > 0 else 0
+
+    def doit(self, segs, iou_threshold):
+        """Perform NMS to filter overlapping segments."""
+        confidences = np.ndarray.flatten(np.array([seg.confidence for seg in segs[1]]))
+
+        # Sort boxes by confidence (high to low)
+        sorted_indices = np.argsort(confidences)[::-1].tolist()
+        keep = []
+
+        while len(sorted_indices) > 0:
+            idx = sorted_indices[0]
+            mask1 = core.segs_to_combined_mask((segs[0], [segs[1][idx]]))
+            keep.append(idx)
+            sorted_indices = sorted_indices[1:]
+
+            # Filter indices only contain the indices where the bbox does not intersect
+            filtered_indices = []
+            for i in sorted_indices:
+                mask2 = core.segs_to_combined_mask((segs[0], [segs[1][i]]))
+                iou = self.compute_iou(mask1, mask2)
+                if iou < iou_threshold:
+                    filtered_indices.append(i)
+
+            sorted_indices = np.array(filtered_indices)
+
+        filtered_segs = [segs[1][i] for i in keep]
+        return (segs[0], filtered_segs),
 
 
 class SEGSToImageList:

@@ -129,9 +129,13 @@ class SAMLoader:
     @classmethod
     def INPUT_TYPES(cls):
         models = [x for x in folder_paths.get_filename_list("sams") if 'hq' not in x]
+
+        if 'ESAM_ModelLoader_Zho' in nodes.NODE_CLASS_MAPPINGS:
+            models.append('ESAM')
+
         return {
             "required": {
-                "model_name": (models + ['ESAM'], {"tooltip": "The detection accuracy varies depending on the SAM model. ESAM can only be used if ComfyUI-YoloWorld-EfficientSAM is installed."}),
+                "model_name": (models, {"tooltip": "The detection accuracy varies depending on the SAM model. ESAM can only be used if ComfyUI-YoloWorld-EfficientSAM is installed."}),
                 "device_mode": (["AUTO", "Prefer GPU", "CPU"], {"tooltip": "AUTO: Only applicable when a GPU is available. It temporarily loads the SAM_MODEL into VRAM only when the detection function is used.\n"
                                                                            "Prefer GPU: Tries to keep the SAM_MODEL on the GPU whenever possible. This can be used when there is sufficient VRAM available.\n"
                                                                            "CPU: Always loads only on the CPU."}),

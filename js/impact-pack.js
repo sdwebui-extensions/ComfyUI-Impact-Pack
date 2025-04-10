@@ -223,29 +223,29 @@ api.addEventListener("executed", progressExecuteHandler);
 app.registerExtension({
 	name: "Comfy.Impack",
 
-    commands: [
-      {
-        id: 'refresh-impact-wildcard',
-        label: 'Impact: Refresh Wildcard',
-        function: async () => {
-        	await api.fetchApi('/impact/wildcards/refresh');
-        	await load_wildcards();
-        	app.extensionManager.toast.add({
-				severity: 'info',
-				summary: 'Refreshed!',
-				detail: 'Impact Wildcard List is refreshed!!',
-				life: 3000
-			});
-        }
-      }
-    ],
+	commands: [
+		{
+			id: 'refresh-impact-wildcard',
+			label: 'Impact: Refresh Wildcard',
+			function: async () => {
+				await api.fetchApi('/impact/wildcards/refresh');
+				await load_wildcards();
+				app.extensionManager.toast.add({
+					severity: 'info',
+					summary: 'Refreshed!',
+					detail: 'Impact Wildcard List is refreshed!!',
+					life: 3000
+				});
+			}
+		}
+	],
 
-    menuCommands: [
-      {
-        path: ['Edit'],
-        commands: ['refresh-impact-wildcard']
-      }
-    ],
+	menuCommands: [
+		{
+			path: ['Edit'],
+			commands: ['refresh-impact-wildcard']
+		}
+	],
 
 	loadedGraphNode(node, app) {
 		if (node.comfyClass == "MaskPainter") {
@@ -617,12 +617,14 @@ app.registerExtension({
 
 		if(node.comfyClass == "ImpactSEGSLabelFilter" || node.comfyClass == "SEGSLabelFilterDetailerHookProvider") {
 			node.widgets[0].callback = (value, canvas, node, pos, e) => {
-				if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
-					node.widgets[1].value += ", "
+				if(node) {
+					if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
+						node.widgets[1].value += ", "
 
-				node.widgets[1].value += value;
-				if(node.widgets_values)
-					node.widgets_values[1] = node.widgets[1].value;
+					node.widgets[1].value += value;
+					if(node.widgets_values)
+						node.widgets_values[1] = node.widgets[1].value;
+				}
 			}
 
 			Object.defineProperty(node.widgets[0], "value", {
@@ -696,18 +698,20 @@ app.registerExtension({
 					break;
 			}
 
-            node.widgets[combo_id+1].callback = (value, canvas, node, pos, e) => {
-                    if(node.widgets[tbox_id].value != '')
-                        node.widgets[tbox_id].value += ', '
+			node.widgets[combo_id+1].callback = (value, canvas, node, pos, e) => {
+					if(node) {
+						if(node.widgets[tbox_id].value != '')
+							node.widgets[tbox_id].value += ', '
 
-                    node.widgets[tbox_id].value += node._wildcard_value;
-            }
+						node.widgets[tbox_id].value += node._wildcard_value;
+					}
+			}
 
 			Object.defineProperty(node.widgets[combo_id+1], "value", {
 				set: (value) => {
-                    if (value !== "Select the Wildcard to add to the text")
-                        node._wildcard_value = value;
-                },
+					if (value !== "Select the Wildcard to add to the text")
+						node._wildcard_value = value;
+				},
 				get: () => { return "Select the Wildcard to add to the text"; }
 			});
 
@@ -720,14 +724,16 @@ app.registerExtension({
 
 			if(has_lora) {
 				node.widgets[combo_id].callback = (value, canvas, node, pos, e) => {
-					let lora_name = node._value;
-					if(lora_name.endsWith('.safetensors')) {
-						lora_name = lora_name.slice(0, -12);
-					}
+					if(node) {
+						let lora_name = node._value;
+						if(lora_name.endsWith('.safetensors')) {
+							lora_name = lora_name.slice(0, -12);
+						}
 
-					node.widgets[tbox_id].value += `<lora:${lora_name}>`;
-					if(node.widgets_values) {
-						node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
+						node.widgets[tbox_id].value += `<lora:${lora_name}>`;
+						if(node.widgets_values) {
+							node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
+						}
 					}
 				}
 

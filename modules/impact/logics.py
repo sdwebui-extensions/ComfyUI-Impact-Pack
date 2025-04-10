@@ -701,6 +701,9 @@ class ImpactControlBridge:
                 return (value, )
             else:
                 return (ExecutionBlocker(None), )
+        elif extra_pnginfo is None:
+            logging.warn(f"[Impact Pack] limitation: '{behavior}' behavior cannot be used in API execution.")
+            return (value,)
         else:
             workflow_nodes, links = workflow_to_map(extra_pnginfo['workflow'])
 
