@@ -251,7 +251,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 
 
 ### Impact KSampler
-  * These samplers support basic_pipe and AYS scheduler
+  * These samplers support basic_pipe and AYS/OSS/GITS scheduler
   * `KSampler (pipe)` - pipe version of KSampler
   * `KSampler (advanced/pipe)` - pipe version of KSamplerAdvacned
   * When converting the scheduler widget to input, refer to the `Impact Scheduler Adapter` node to resolve compatibility issues.
