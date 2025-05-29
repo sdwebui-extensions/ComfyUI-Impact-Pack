@@ -446,6 +446,31 @@ class MakeMaskList:
         return (masks, )
 
 
+class NthItemOfAnyList:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required":  {
+                    "any_list": (any_typ,),
+                    "index": ("INT", {"default": 0, "min": 0, "max": sys.maxsize, "step": 1, "tooltip": "The index of the item you want to select from the list."}),
+                    }
+        }
+
+    RETURN_TYPES = (any_typ,)
+    INPUT_IS_LIST = True
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "Selects the Nth item from a list. If the index is out of range, it returns the last item in the list."
+
+    def doit(self, any_list, index):
+        i = index[0]
+        if i >= len(any_list):
+            return (any_list[-1],)
+        else:
+            return (any_list[i],)
+
+
 class MakeImageList:
     @classmethod
     def INPUT_TYPES(s):

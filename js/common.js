@@ -3,6 +3,48 @@ import { app } from "../../scripts/app.js";
 
 let original_show = app.ui.dialog.show;
 
+export function customAlert(message) {
+	try {
+		app.extensionManager.toast.addAlert(message);
+	}
+	catch {
+		alert(message);
+	}
+}
+
+export function isBeforeFrontendVersion(compareVersion) {
+    try {
+        const frontendVersion = window['__COMFYUI_FRONTEND_VERSION__'];
+        if (typeof frontendVersion !== 'string') {
+            return false;
+        }
+
+        function parseVersion(versionString) {
+            const parts = versionString.split('.').map(Number);
+            return parts.length === 3 && parts.every(part => !isNaN(part)) ? parts : null;
+        }
+
+        const currentVersion = parseVersion(frontendVersion);
+        const comparisonVersion = parseVersion(compareVersion);
+
+        if (!currentVersion || !comparisonVersion) {
+            return false;
+        }
+
+        for (let i = 0; i < 3; i++) {
+            if (currentVersion[i] > comparisonVersion[i]) {
+                return false;
+            } else if (currentVersion[i] < comparisonVersion[i]) {
+                return true;
+            }
+        }
+
+        return false;
+    } catch {
+        return true;
+    }
+}
+
 function dialog_show_wrapper(html) {
 	if (typeof html === "string") {
 		if(html.includes("IMPACT-PACK-SIGNAL: STOP CONTROL BRIDGE")) {

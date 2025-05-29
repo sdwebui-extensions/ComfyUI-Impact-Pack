@@ -234,6 +234,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactMakeAnyList": MakeAnyList,
     "ImpactMakeMaskList": MakeMaskList,
     "ImpactMakeMaskBatch": MakeMaskBatch,
+    "ImpactSelectNthItemOfAnyList": NthItemOfAnyList,
 
     "RegionalSampler": RegionalSampler,
     "RegionalSamplerAdvanced": RegionalSamplerAdvanced,
@@ -407,6 +408,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactMakeMaskList": "Make Mask List",
     "ImpactMakeMaskBatch": "Make Mask Batch",
     "ImpactMakeAnyList": "Make List (Any)",
+    "ImpactSelectNthItemOfAnyList": "Select Nth Item (Any list)",
 
     "ImpactStringSelector": "String Selector",
     "StringListToString": "String List to String",

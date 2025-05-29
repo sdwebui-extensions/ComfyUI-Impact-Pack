@@ -8,7 +8,7 @@ from impact.utils import any_typ
 import impact.core as core
 import re
 import nodes
-import traceback
+
 
 class ImpactCompare:
     @classmethod
@@ -572,27 +572,6 @@ class ImpactSleep:
     def doit(self, signal, seconds):
         time.sleep(seconds)
         return (signal,)
-
-
-error_skip_flag = False
-try:
-    import cm_global
-    def filter_message(str):
-        global error_skip_flag
-
-        if "IMPACT-PACK-SIGNAL: STOP CONTROL BRIDGE" in str:
-            return True
-        elif error_skip_flag and "ERROR:root:!!! Exception during processing !!!\n" == str:
-            error_skip_flag = False
-            return True
-        else:
-            return False
-
-    cm_global.try_call(api='cm.register_message_collapse', f=filter_message)
-
-except Exception as e:
-    print(f"[WARN] ComfyUI-Impact-Pack: `ComfyUI` or `ComfyUI-Manager` is an outdated version.")
-    pass
 
 
 def workflow_to_map(workflow):
