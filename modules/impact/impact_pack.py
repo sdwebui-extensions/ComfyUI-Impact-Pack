@@ -1939,7 +1939,7 @@ class MaskRectArea:
         # search for node
         node_found = False
         for node in extra_pnginfo["workflow"]["nodes"]:
-            if node["id"] == int(unique_id):
+            if str(node["id"]) == unique_id:
                 min_x = node["properties"].get("x", 0) / 100
                 min_y = node["properties"].get("y", 0) / 100
                 width = node["properties"].get("w", 0) / 100

@@ -520,6 +520,14 @@ app.registerExtension({
 					return;
 				}
 
+				if(stackTrace.includes('pasteFromClipboard')) {
+					if(this.widgets?.[0]) {
+						this.widgets[0].options.max = this.inputs.length-3;
+						this.widgets[0].value = Math.min(this.widgets[0].value, this.widgets[0].options.max);
+					}
+					return;
+				}
+
 				if(!link_info)
 					return;
 
