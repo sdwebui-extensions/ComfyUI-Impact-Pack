@@ -1,28 +1,25 @@
+import io
+import logging
 import os
+import random
 import threading
 import traceback
+from io import BytesIO
 
-from aiohttp import web
-
-import impact
+import comfy
 import folder_paths
-
-import torchvision
-
+import impact
 import impact.core as core
 import impact.impact_pack as impact_pack
-from impact.utils import to_tensor
-from segment_anything import SamPredictor, sam_model_registry
-import numpy as np
+import impact.utils as utils
 import nodes
+import numpy as np
+import torchvision
+from aiohttp import web
+from impact.utils import to_tensor
 from PIL import Image
-import io
-import comfy
-from io import BytesIO
-import random
+from segment_anything import SamPredictor, sam_model_registry
 from server import PromptServer
-import logging
-
 
 sam_predictor = None
 default_sam_model_name = os.path.join(impact_pack.model_path, "sams", "sam_vit_b_01ec64.pth")
@@ -108,7 +105,8 @@ async def release_sam(request):
     global sam_predictor
 
     with sam_lock:
-        del sam_predictor
+        temp = sam_predictor
+        del temp
         sam_predictor = None
 
     logging.info("[Impact Pack]: unloading SAM model")
@@ -144,7 +142,7 @@ async def sam_detect(request):
                     plabs.append(0)
 
                 detected_masks = core.sam_predict(sam_predictor, points, plabs, None, threshold)
-                mask = core.combine_masks2(detected_masks)
+                mask = utils.combine_masks2(detected_masks)
 
                 if mask is None:
                     return web.Response(status=400)
@@ -176,6 +174,23 @@ async def wildcards_refresh(request):
 @PromptServer.instance.routes.get("/impact/wildcards/list")
 async def wildcards_list(request):
     data = {'data': impact.wildcards.get_wildcard_list()}
+    return web.json_response(data)
+
+
+@PromptServer.instance.routes.get("/impact/wildcards/list/loaded")
+async def wildcards_list_loaded(request):
+    """
+    Get list of actually loaded wildcards (progressive loading in on-demand mode).
+
+    Returns:
+        - In on-demand mode: only wildcards that have been loaded into memory
+        - In full cache mode: same as /wildcards/list (all wildcards)
+    """
+    data = {
+        'data': impact.wildcards.get_loaded_wildcard_list(),
+        'on_demand_mode': impact.wildcards.is_on_demand_mode(),
+        'total_available': len(impact.wildcards.available_wildcards) if impact.wildcards.is_on_demand_mode() else len(impact.wildcards.wildcard_dict)
+    }
     return web.json_response(data)
 
 
@@ -238,7 +253,7 @@ async def view_validate(request):
 
 
 @PromptServer.instance.routes.get("/impact/validate/pb_id_image")
-async def view_validate(request):
+async def view_pb_id_image(request):
     if "id" in request.rel_url.query:
         pb_id = request.rel_url.query["id"]
 
@@ -308,7 +323,7 @@ async def view_previewbridge_image(request):
         if pb_id in core.preview_bridge_image_id_map:
             file = core.preview_bridge_image_id_map[pb_id]
 
-            with Image.open(file) as img:
+            with Image.open(file):
                 filename = os.path.basename(file)
                 return web.FileResponse(file, headers={"Content-Disposition": f"filename=\"{filename}\""})
 
@@ -372,7 +387,7 @@ def onprompt_for_switch(json_data):
                         if 'BOOLEAN' == input_node['inputs']['typ']:
                             try:
                                 onprompt_cond_branch_info[k] = input_node['inputs']['value'].lower() == "true"
-                            except:
+                            except Exception:
                                 pass
                 else:
                     onprompt_cond_branch_info[k] = cond_input
@@ -474,6 +489,25 @@ def regional_sampler_seed_update(json_data):
                 PromptServer.instance.send_sync("impact-node-feedback", {"node_id": k, "widget_name": "seed_2nd", "type": "INT", "value": new_seed})
 
 
+def find_input_value(input_node, prompt, input_type=int, input_keys=('value',)):
+    input_val = None
+
+    try:
+        for n in input_keys:
+            input_val = input_node['inputs'].get(n, None)
+            if isinstance(input_val, input_type):
+                break
+            elif isinstance(input_val, list) and len(input_val):
+                input_val = find_input_value(prompt[input_val[0]], prompt=prompt, input_type=input_type, input_keys=input_keys)
+                if input_val is not None:
+                    break
+        
+    except Exception as e :
+        logging.warning(f"[Impact Pack] Error encountered on find {input_type} value - {e}")
+    
+    return input_val
+
+
 def onprompt_populate_wildcards(json_data):
     prompt = json_data['prompt']
 
@@ -499,14 +533,16 @@ def onprompt_populate_wildcards(json_data):
                             input_seed = int(input_node['inputs']['value'])
                             if not isinstance(input_seed, int):
                                 continue
-                        if input_node['class_type'] == 'Seed (rgthree)':
+                        elif input_node['class_type'] == 'Seed (rgthree)':
                             input_seed = int(input_node['inputs']['seed'])
                             if not isinstance(input_seed, int):
                                 continue
                         else:
-                            logging.info(f"[Impact Pack] Only `ImpactInt`, `Seed (rgthree)` and `Primitive` Node are allowed as the seed for '{v['class_type']}'. It will be ignored. ")
-                            continue
-                    except:
+                            input_seed = find_input_value(input_node, prompt=prompt, input_type=int, input_keys=('int', 'seed', 'value'))
+                            if input_seed is None:
+                                logging.info(f"[Impact Pack] Only `ImpactInt`, `Seed (rgthree)` and `Primitive` Node are allowed as the seed for '{v['class_type']}'. It will be ignored. ")
+                                continue
+                    except Exception:
                         continue
                 else:
                     input_seed = int(inputs['seed'])
@@ -516,18 +552,21 @@ def onprompt_populate_wildcards(json_data):
 
                 PromptServer.instance.send_sync("impact-node-feedback", {"node_id": k, "widget_name": "populated_text", "type": "STRING", "value": inputs['populated_text']})
                 updated_widget_values[k] = inputs['populated_text']
-            
+
             if inputs['mode'] == 'reproduce':
                 PromptServer.instance.send_sync("impact-node-feedback", {"node_id": k, "widget_name": "mode", "type": "STRING", "value": 'populate'})
 
 
 
-    if 'extra_data' in json_data and 'extra_pnginfo' in json_data['extra_data']:
-        for node in json_data['extra_data']['extra_pnginfo']['workflow']['nodes']:
-            key = str(node['id'])
-            if key in updated_widget_values:
-                node['widgets_values'][1] = updated_widget_values[key]
-                node['widgets_values'][2] = 'reproduce'
+    match json_data:
+        case {"extra_data": {"extra_pnginfo": {"workflow": {"nodes": nodes}}}}:
+            for node in nodes:
+                match node:
+                    case {"id": id, "widgets_values": widgets_values}:
+                        key = str(id)
+                        if key in updated_widget_values:
+                            widgets_values[1] = updated_widget_values[key]
+                            widgets_values[2] = "reproduce"
 
 
 def onprompt_for_remote(json_data):
@@ -571,8 +610,8 @@ def onprompt(json_data):
         workflow_imagereceiver_update(json_data)
         regional_sampler_seed_update(json_data)
         core.current_prompt = json_data
-    except Exception as e:
-        logging.warning(f"[Impact Pack] ComfyUI-Impact-Pack: Error on prompt - several features will not work.\n{e}")
+    except Exception:
+        logging.exception("[Impact Pack] ComfyUI-Impact-Pack: Error on prompt - several features will not work.")
 
     return json_data
 

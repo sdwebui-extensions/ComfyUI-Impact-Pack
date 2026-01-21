@@ -83,3 +83,46 @@ class PreviewDetailerHookProvider:
     def doit(self, quality, unique_id):
         hook = hooks.PreviewDetailerHook(unique_id, quality)
         return hook, hook
+
+
+class LamaRemoverDetailerHookProvider:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mask_threshold":("INT", {"default": 250, "min": 0, "max": 255, "step": 1, "display": "slider"}),
+                "gaussblur_radius": ("INT", {"default": 8, "min": 0, "max": 20, "step": 1, "display": "slider"}),
+                "skip_sampling": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("DETAILER_HOOK", )
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    def doit(self, mask_threshold, gaussblur_radius, skip_sampling):
+        hook = hooks.LamaRemoverDetailerHook(mask_threshold, gaussblur_radius, skip_sampling)
+        return (hook, )
+
+
+class BlackPatchRetryHookProvider:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mean_thresh": ("INT", {"default": 10, "min": 0, "max": 255}),
+                "var_thresh": ("INT", {"default": 5, "min": 0, "max": 255})
+            },
+        }
+
+    RETURN_TYPES = ("DETAILER_HOOK", )
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    NOT_IDEMPOTENT = True
+
+    def doit(self, mean_thresh, var_thresh):
+        hook = hooks.BlackPatchRetryHook(mean_thresh, var_thresh)
+        return hook, 

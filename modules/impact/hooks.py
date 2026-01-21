@@ -10,6 +10,7 @@ import folder_paths
 import os
 from comfy_extras import nodes_custom_sampler
 import math
+import logging
 
 
 class PixelKSampleHook:
@@ -25,7 +26,7 @@ class PixelKSampleHook:
     def post_decode(self, pixels):
         return pixels
 
-    def post_upscale(self, pixels):
+    def post_upscale(self, pixels, mask=None):
         return pixels
 
     def post_encode(self, samples):
@@ -64,8 +65,8 @@ class PixelKSampleHookCombine(PixelKSampleHook):
     def post_decode(self, pixels):
         return self.hook2.post_decode(self.hook1.post_decode(pixels))
 
-    def post_upscale(self, pixels):
-        return self.hook2.post_upscale(self.hook1.post_upscale(pixels))
+    def post_upscale(self, pixels, mask=None):
+        return self.hook2.post_upscale(self.hook1.post_upscale(pixels, mask), mask)
 
     def post_encode(self, samples):
         return self.hook2.post_encode(self.hook1.post_encode(samples))
@@ -108,6 +109,18 @@ class DetailerHookCombine(PixelKSampleHookCombine):
         noise_1st, is_touched = self.hook1.get_custom_noise(seed, noise, is_touched)
         noise_2nd, is_touched = self.hook2.get_custom_noise(seed, noise, is_touched)
         return noise, is_touched
+
+    def get_custom_sampler(self):
+        if self.hook1.get_custom_sampler() is not None:
+            return self.hook1.get_custom_sampler()
+        else:
+            return self.hook2.get_custom_sampler()
+
+    def get_skip_sampling(self):
+        return self.hook1.get_skip_sampling() and self.hook2.get_skip_sampling()
+    
+    def should_retry_patch(self, patch):
+        return self.hook1.should_retry_patch(patch) or self.hook2.should_retry_patch(patch)
 
 
 class SimpleCfgScheduleHook(PixelKSampleHook):
@@ -172,6 +185,24 @@ class DetailerHook(PixelKSampleHook):
 
     def get_custom_noise(self, seed, noise, is_touched):
         return noise, is_touched
+
+    def get_custom_sampler(self):
+        return None
+
+    def get_skip_sampling(self):
+        return False
+    
+    def should_retry_patch(self, patch):
+        return False
+
+
+class CustomSamplerDetailerHookProvider(DetailerHook):
+    def __init__(self, sampler):
+        super().__init__()
+        self.sampler = sampler
+
+    def get_custom_sampler(self):
+        return self.sampler
 
 
 # class CustomNoiseDetailerHookProvider(DetailerHook):
@@ -315,7 +346,7 @@ class InjectNoiseHook(PixelKSampleHook):
 
         strength = self.start_strength + (self.end_strength - self.start_strength) * cur_step / self.total_step
         samples = InjectNoise().inject_noise(samples, strength, noise, mask)[0]
-        print(f"[Impact Pack] InjectNoiseHook: strength = {strength}")
+        logging.info(f"[Impact Pack] InjectNoiseHook: strength = {strength}")
 
         if mask is not None:
             samples['noise_mask'] = mask
@@ -346,7 +377,7 @@ class UnsamplerHook(PixelKSampleHook):
         end_at_step = self.start_end_at_step + (self.end_end_at_step - self.start_end_at_step) * cur_step / self.total_step
         end_at_step = int(end_at_step)
 
-        print(f"[Impact Pack] UnsamplerHook: end_at_step = {end_at_step}")
+        logging.info(f"[Impact Pack] UnsamplerHook: end_at_step = {end_at_step}")
 
         # inj noise
         mask = None
@@ -486,6 +517,27 @@ class SEGSLabelFilterDetailerHook(DetailerHook):
         return segs_nodes.SEGSLabelFilter().doit(segs, "", self.labels)[0]
 
 
+class LamaRemoverDetailerHook(DetailerHook):
+    def __init__(self, mask_threshold, gaussblur_radius, skip_sampling):
+        super().__init__()
+        self.mask_threshold = mask_threshold
+        self.gaussblur_radius = gaussblur_radius
+        self.skip_sampling = skip_sampling
+
+    def post_upscale(self, img, mask=None):
+        if "LamaRemover" in nodes.NODE_CLASS_MAPPINGS:
+            lama_remover_obj = nodes.NODE_CLASS_MAPPINGS['LamaRemover']()
+        else:
+            utils.try_install_custom_node('https://github.com/Layer-norm/comfyui-lama-remover',
+                                          "To use 'LAMARemoverDetailerHookProvider', 'comfyui-lama-remover' nodepack is required.")
+            raise Exception("'LamaRemover' node is not installed.")
+
+        return lama_remover_obj.lama_remover(img, masks=mask, mask_threshold=self.mask_threshold, gaussblur_radius=self.gaussblur_radius, invert_mask=False)[0]
+
+    def get_skip_sampling(self):
+        return self.skip_sampling
+
+
 class PreviewDetailerHook(DetailerHook):
     def __init__(self, node_id, quality):
         super().__init__()
@@ -514,5 +566,30 @@ class PreviewDetailerHook(DetailerHook):
         PromptServer.instance.send_sync("impact-preview", {'node_id': self.node_id, 'item': item})
 
     def post_paste(self, image):
-        asyncio.run(self.send(image))
+        loop = asyncio.get_running_loop()
+        loop.create_task(self.send(image))
         return image
+
+
+class BlackPatchRetryHook(DetailerHook):
+    def __init__(self, mean_thresh, var_thresh):
+        super().__init__()
+        assert 0 <= mean_thresh <= 255 and 0 <= var_thresh <= 255
+        self.mean_thresh = mean_thresh
+        self.var_thresh = var_thresh
+
+    def should_retry_patch(self, cropped_region):
+        # remove the first dimension (batch_size)
+        if cropped_region.ndim == 4:
+            assert cropped_region.shape[0] == 1
+            cropped_region = cropped_region.squeeze(0)
+        
+        # turn image to grayscape
+        if cropped_region.ndim == 3:
+            assert cropped_region.shape[-1] in [1, 3]
+            cropped_region = cropped_region.mean(axis=-1)  # simple average grayscale
+
+        mean = cropped_region.mean()
+        var = cropped_region.var()
+
+        return (mean <= self.mean_thresh/255) and (var <= self.var_thresh/255)

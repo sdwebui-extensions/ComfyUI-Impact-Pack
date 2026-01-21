@@ -8,6 +8,9 @@ This node pack helps to conveniently enhance images through Detector, Detailer, 
 NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pack. To use the UltralyticsDetectorProvider node, please install the ComfyUI-Impact-Subpack separately.
 
 ## NOTICE 
+* V8.24: This compatibility patch requires ComfyUI version 0.3.63 or higher due to structural changes in DifferentialDiffusion.
+* V8.19: legacy nodes (mmdet and etc.) are removed
+* V8.18: Support [facebookresearch/sam2](https://github.com/facebookresearch/sam2) models
 * V8.0: The `Impact Subpack` is no longer installed automatically. To use `UltralyticsDetectorProvider` nodes, please install the `Impact Subpack` separately.
 * V7.6: Automatic installation is no longer supported. Please install using ComfyUI-Manager, or manually install requirements.txt and run install.py to complete the installation.
 * V7.0: Supports Switch based on Execution Model Inversion.
@@ -57,9 +60,10 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 ### Companion Pack
 * If you need the `Ultralytics Detector Provider` to use various YOLO detection models, you should also install [ComfyUI-Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack).
 
+
 ## Custom Nodes
 ### [Detector nodes](https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/detectors.md)
-  * `SAMLoader` - Loads the SAM model.
+  * `SAMLoader (Impact)` - Loads the SAM model.
   * `ONNXDetectorProvider` - Loads the ONNX model to provide BBOX_DETECTOR.
   * `CLIPSegDetectorProvider` - Wrapper for CLIPSeg to provide BBOX_DETECTOR.
     * You need to install the ComfyUI-CLIPSeg node extension.
@@ -70,6 +74,10 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
     * As a result, it outputs the `combined_mask`, which is a unified mask, and `batch_masks`, which are multiple masks grouped together in batch form.
     * While `batch_masks` may not be completely separated, it provides functionality to perform some level of segmentation.
   * `Simple Detector (SEGS)` - Operating primarily with `BBOX_DETECTOR`, and with the additional provision of `SAM_MODEL` or `SEGM_DETECTOR`, this node internally generates improved SEGS through mask operations on both *bbox* and *silhouette*. It serves as a convenient tool to simplify a somewhat intricate workflow.
+  * `Simple Detector for Video (SEGS)` – Performs detection on videos composed of image frames. Instead of using a single mask, it performs detection individually on each image frame and generates a SEGS object with a batch of masks. 
+  * `SAM2 Video Detector (SEGS)` – Similar to `Simple Detector for Video (SEGS)`, but utilizes SAM2’s video tracking technology to generate a SEGS object with a batch of masks. 
+      * To use this node, you must select a SAM2 model in the SAMLoader.
+
 
 ### ControlNet, IPAdapter
   * `ControlNetApply (SEGS)` - To apply ControlNet in SEGS, you need to use the Preprocessor Provider node from the Inspire Pack to utilize this node.
@@ -78,6 +86,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
     * The `segs_preprocessor` operates by applying preprocessing on-the-fly based on the cropped image during the detailing process, while `control_image` will be cropped and used as input to `ControlNetApply (SEGS)`.
   * `ControlNetClear (SEGS)` - Clear applied ControlNet in SEGS
   * `IPAdapterApply (SEGS)` - To apply IPAdapter in SEGS, you need to use the Preprocessor Provider node from the Inspire Pack to utilize this node.
+
 
 ### Mask operation
   * `Pixelwise(SEGS & SEGS)` - Performs a 'pixelwise and' operation between two SEGS.
@@ -96,12 +105,14 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `Mask Rect Area` - Create a rectangular mask defined by percentages with preview canvas.
   * `Mask Rect Area (Advanced)` - Create a rectangular mask defined by pixels and image size. 
 
+
 ### [Detailer nodes](https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/detailers.md)
   * `Detailer (SEGS)` - Refines the image based on SEGS.
+  * `Detailer (SEGS) with auto retry` - Refines the image based on SEGS and will automatically retry if the patch is all black.
   * `DetailerDebug (SEGS)` - Refines the image based on SEGS. Additionally, it provides the ability to monitor the cropped image and the refined image of the cropped image.
     * To prevent regeneration caused by the seed that does not change every time when using 'external_seed', please disable the 'seed random generate' option in the 'Detailer...' node.
   * `MASK to SEGS` - Generates SEGS based on the mask.
-  * `MASK to SEGS For AnimateDiff` - Generates SEGS based on the mask for AnimateDiff.
+  * `MASK to SEGS For Video` - Generates SEGS based on the mask for Video. (Renamed from `MASK to SEGS For AnimateDiff`)
     * When using a single mask, convert it to SEGS to apply it to the entire frame.
     * When using a batch mask, the contour fill feature is disabled.
   * `MediaPipe FaceMesh to SEGS` - Separate each landmark from the mediapipe facemesh image to create labeled SEGS.
@@ -117,6 +128,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 
   * `FromDetailer (SDXL/pipe)`, `BasicPipe -> DetailerPipe (SDXL)`, `Edit DetailerPipe (SDXL)` - These are pipe functions used in Detailer for utilizing the refiner model of SDXL.
   * `Any PIPE -> BasicPipe` - Convert the PIPE Value of other custom nodes that are not BASIC_PIPE but internally have the same structure as BASIC_PIPE to BASIC_PIPE. If an incompatible type is applied, it may cause runtime errors.
+
 
 ### SEGS Manipulation nodes
   * `SEGSDetailer` - Performs detailed work on SEGS without pasting it back onto the original image.
@@ -154,6 +166,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
     * `From SEG_ELT` crop_region - Extract coordinate from crop_region in SEG_ELT
   * `Count Elt in SEGS` - Number of Elts ins SEGS
  
+
 ### Pipe nodes
    * `ToDetailerPipe`, `FromDetailerPipe` - These nodes are used to bundle multiple inputs used in the detailer, such as models and vae, ..., into a single DETAILER_PIPE or extract the elements that are bundled in the DETAILER_PIPE.
    * `ToBasicPipe`, `FromBasicPipe` - These nodes are used to bundle model, clip, vae, positive conditioning, and negative conditioning into a single BASIC_PIPE, or extract each element from the BASIC_PIPE.
@@ -165,6 +178,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * Similar to `Latent Scale (on Pixel Space)`, if upscale_model_opt is provided, it performs pixel upscaling using the model.
 * `PixelTiledKSampleUpscalerProvider` - It is similar to `PixelKSampleUpscalerProvider`, but it uses `ComfyUI_TiledKSampler` and Tiled VAE Decoder/Encoder to avoid GPU VRAM issues at high resolutions.
   * You need to install the [BlenderNeko/ComfyUI_TiledKSampler](https://github.com/BlenderNeko/ComfyUI_TiledKSampler) node extension.
+
 
 ### PK_HOOK
   * `DenoiseScheduleHookProvider` - IterativeUpscale provides a hook that gradually changes the denoise to target_denoise as the iterative-step progresses.
@@ -179,6 +193,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `PixelKSampleHookCombine` - This is used to connect two PK_HOOKs. hook1 is executed first and then hook2 is executed.
     * If you want to simultaneously change cfg and denoise, you can combine the PK_HOOKs of CfgScheduleHookProvider and PixelKSampleHookCombine.
  
+
 ### DETAILER_HOOK
   * `NoiseInjectionDetailerHookProvider` - The `detailer_hook` is a hook in the `Detailer` that injects noise during the processing of each SEGS.
   * `UnsamplerDetailerHookProvider` - Apply Unsampler during each cycle. To use this node, ComfyUI_Noise must be installed.
@@ -189,12 +204,18 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `PreviewDetailerHook` - Connecting this hook node helps provide assistance for viewing previews whenever SEGS Detailing tasks are completed. When working with a large number of SEGS, such as Make Tile SEGS, it allows for monitoring the situation as improvements progress incrementally.
     * Since this is the hook applied when pasting onto the original image, it has no effect on nodes like `SEGSDetailer`.
   * `VariationNoiseDetailerHookProvider` - Apply variation seed to the detailer. It can be applied in multiple stages through combine.
+  * `CustomSamplerDetailerHookProvider` - Apply a hook that allows you to use a custom sampler in the Detailer nodes. When using `DetailerHookCombine`, the sampler from the first hook is applied.
+  * `LamaRemoverDetailerHookProvider` – Applies Lama Remover to the upscaled image during the detailing stage. If `skip_sampling` is set to True, Lama Remover can be used alone without the detailing stage, allowing it to simply remove detected regions.
+      * Not applicable for **AnimateDiff** detailers. When using `DetailerHookCombine`, `skip_sampling` is only applied if it is set to `True` for all hooks.
+      * To use this node, the node pack at [Layer-norm/comfyui-lama-remover](https://github.com/Layer-norm/comfyui-lama-remover) must be installed.
+
 
 ### Iterative Upscale nodes
   * `Iterative Upscale (Latent/on Pixel Space)` - The upscaler takes the input upscaler and splits the scale_factor into steps, then iteratively performs upscaling. 
   This takes latent as input and outputs latent as the result.
   * `Iterative Upscale (Image)` - The upscaler takes the input upscaler and splits the scale_factor into steps, then iteratively performs upscaling. This takes image as input and outputs image as the result.
     * Internally, this node uses 'Iterative Upscale (Latent)'.
+
 
 ### TwoSamplers nodes
 * `TwoSamplersForMask` - This node can apply two samplers depending on the mask area. The base_sampler is applied to the area where the mask is 0, while the mask_sampler is applied to the area where the mask is 1.
@@ -210,6 +231,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 * `TwoSamplersForMaskUpscalerProvider` - This is an Upscaler that extends TwoSamplersForMask to be used in Iterative Upscale.
   * TwoSamplersForMaskUpscalerProviderPipe - pipe version of TwoSamplersForMaskUpscalerProvider.
 
+
 ### Image Utils
   * `PreviewBridge (image)` - This custom node can be used with a bridge for image when using the MaskEditor feature of Clipspace.
   * `PreviewBridge (latent)` - This custom node can be used with a bridge for latent image when using the MaskEditor feature of Clipspace.
@@ -222,11 +244,13 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
     * Furthermore, LatentSender is implemented with PreviewLatent, which stores the latent in payload form within the image thumbnail.
     * Due to the current structure of ComfyUI, it is unable to distinguish between SDXL latent and SD1.5/SD2.1 latent. Therefore, it generates thumbnails by decoding them using the SD1.5 method.
 
+
 ### Switch nodes
   * `Switch (image,mask)`, `Switch (latent)`, `Switch (SEGS)` - Among multiple inputs, it selects the input designated by the selector and outputs it. The first input must be provided, while the others are optional. However, if the input specified by the selector is not connected, an error may occur.
   * `Switch (Any)` - This is a Switch node that takes an arbitrary number of inputs and produces a single output. Its type is determined when connected to any node, and connecting inputs increases the available slots for connections.
   * `Inversed Switch (Any)` - In contrast to `Switch (Any)`, it takes a single input and outputs one of many.
   * NOTE: See this [tutorial](https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/switch.md) 
+
 
 ### [Wildcards](http://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/ImpactWildcard.md) nodes
   * These are nodes that supports syntax in the form of `__wildcard-name__` and dynamic prompt syntax like `{a|b|c}`.
@@ -238,6 +262,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `ImpactWildcardEncode` - Similar to ImpactWildcardProcessor, this provides the loading functionality of LoRAs (e.g. `<lora:some_awesome_lora:0.7:1.2>`). Populated prompts are encoded using the clip after all the lora loading is done.
     * If the `Inspire Pack` is installed, you can use **Lora Block Weight** in the form of `LBW=lbw spec;`
     * `<lora:chunli:1.0:1.0:LBW=B11:0,0,0,0,0,0,0,0,0,0,A,0,0,0,0,0,0;A=0.;>`, `<lora:chunli:1.0:1.0:LBW=0,0,0,0,0,0,0,0,0,0,A,B,0,0,0,0,0;A=0.5;B=0.2;>`, `<lora:chunli:1.0:1.0:LBW=SD-MIDD;>`
+
 
 ### Regional Sampling
   * These nodes offer the capability to divide regions and perform partial sampling using a mask. Unlike TwoSamplersForMask, sampling for each region is applied during each step.
@@ -270,6 +295,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `Make List (Any)` - Create a list with arbitrary values.
   * `Select Nth Item (Any list)` - Selects the Nth item from a list. If the index is out of range, it returns the last item in the list. 
 
+
 ### Logics (experimental) 
   * These nodes are experimental nodes designed to implement the logic for loops and dynamic switching.
   * `ImpactCompare`, `ImpactConditionalBranch`, `ImpactConditionalBranchSelMode`, `ImpactInt`, `ImpactBoolean`, `ImpactValueSender`, `ImpactValueReceiver`, `ImpactImageInfo`, `ImpactMinMax`, `ImpactNeg`, `ImpactConditionalStopIteration`
@@ -290,6 +316,11 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `Remote Boolean (on prompt)`, `Remote Int (on prompt)` - At the start of the prompt, this node forcibly sets the `widget_value` of `node_id`. It is disregarded if the target widget type is different.
   * You can find the `node_id` by checking through [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) using the format `Badge: #ID Nickname`.
   * Experimental set of nodes for implementing loop functionality (tutorial to be prepared later / [example workflow](test/loop-test.json)).
+
+
+### Limitation
+* Many nodes in the `Impact Pack` use a wildcard type to allow arbitrary input/output connections. This approach will be replaced once ComfyUI officially supports **dynamic types**. Until then, while it functions without issues, type validation may still produce error messages.
+
 
 ### HuggingFace nodes
   * These nodes provide functionalities based on HuggingFace repository models.
@@ -367,15 +398,12 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 ## Config example
 * Once you run the Impact Pack for the first time, an `impact-pack.ini` file will be automatically generated in the Impact Pack directory. You can modify this configuration file to customize the default behavior.
   * `dependency_version` - don't touch this
-  * `mmdet_skip` - disable MMDet based nodes and legacy nodes if `True`
   * `sam_editor_cpu` - use cpu for `SAM editor` instead of gpu
   * sam_editor_model: Specify the SAM model for the SAM editor.
     * You can download various SAM models using ComfyUI-Manager.
     * Path to SAM model: `ComfyUI/models/sams`
 ```
 [default]
-dependency_version = 9
-mmdet_skip = True
 sam_editor_cpu = False
 sam_editor_model = sam_vit_b_01ec64.pth
 ```
@@ -396,7 +424,6 @@ sam_editor_model = sam_vit_b_01ec64.pth
 ![simple](https://github.com/ltdrdata/ComfyUI-extension-tutorials/raw/Main/ComfyUI-Impact-Pack/images/simple.png)
 * The face that has been damaged due to low resolution is restored with high resolution by generating and synthesizing it, in order to restore the details.
 * The FaceDetailer node is a combination of a Detector node for face detection and a Detailer node for image enhancement. See the [Advanced Tutorial](https://github.com/ltdrdata/ComfyUI-extension-tutorials/raw/Main/ComfyUI-Impact-Pack/tutorial/advanced.md) for a more detailed explanation.
-* Pass the MMDetLoader 's bbox model and the detection model loaded by SAMLoader to FaceDetailer . Since it performs the function of KSampler for image enhancement, it overlaps with KSampler's options.
 * The MASK output of FaceDetailer provides a visualization of where the detected and enhanced areas are.
 
 ![simple-orig](https://github.com/ltdrdata/ComfyUI-extension-tutorials/raw/Main/ComfyUI-Impact-Pack/images/simple-original.png) ![simple-refined](https://github.com/ltdrdata/ComfyUI-extension-tutorials/raw/Main/ComfyUI-Impact-Pack/images/simple-refined.png)
@@ -488,3 +515,5 @@ BlenderNeok/[ComfyUI_Noise](https://github.com/BlenderNeko/ComfyUI_Noise) - The 
 WASasquatch/[was-node-suite-comfyui](https://github.com/WASasquatch/was-node-suite-comfyui) - A powerful custom node extensions of ComfyUI.
 
 Trung0246/[ComfyUI-0246](https://github.com/Trung0246/ComfyUI-0246) - Nice bypass hack!
+
+Layer-norm/[comfyui-lama-remover](https://github.com/Layer-norm/comfyui-lama-remover) - Required for using `LamaRemoverDetailerHook`.

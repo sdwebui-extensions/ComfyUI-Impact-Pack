@@ -1,3 +1,5 @@
+import logging
+
 import impact.core as core
 from nodes import MAX_RESOLUTION
 import impact.segs_nodes as segs_nodes
@@ -163,7 +165,7 @@ class SegmDetectorCombined:
         mask = segm_detector.detect_combined(image, threshold, dilation)
 
         if mask is None:
-            mask = torch.zeros((image.shape[2], image.shape[1]), dtype=torch.float32, device="cpu")
+            mask = torch.zeros((image.shape[1], image.shape[2]), dtype=torch.float32, device="cpu")
 
         return (mask.unsqueeze(0),)
 
@@ -183,7 +185,7 @@ class BboxDetectorCombined(SegmDetectorCombined):
         mask = bbox_detector.detect_combined(image, threshold, dilation)
 
         if mask is None:
-            mask = torch.zeros((image.shape[2], image.shape[1]), dtype=torch.float32, device="cpu")
+            mask = torch.zeros((image.shape[1], image.shape[2]), dtype=torch.float32, device="cpu")
 
         return (mask.unsqueeze(0),)
 
@@ -297,6 +299,99 @@ class SimpleDetectorForEachPipe:
                                             sub_threshold, sub_dilation, sub_bbox_expansion,
                                             sam_mask_hint_threshold, post_dilation=post_dilation, sam_model_opt=sam_model_opt, segm_detector_opt=segm_detector_opt,
                                             detailer_hook=detailer_hook)
+
+class SAM2VideoDetectorSEGS:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+            "image_frames": ("IMAGE", ),
+
+            "bbox_detector": ("BBOX_DETECTOR", ),
+            "sam2_model": ("SAM_MODEL", ),
+
+            "bbox_threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+            "sam2_threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+
+            "crop_factor": ("FLOAT", {"default": 3.0, "min": 1.0, "max": 100, "step": 0.1}),
+            "drop_size": ("INT", {"min": 1, "max": MAX_RESOLUTION, "step": 1, "default": 10}),
+            }
+        }
+
+    RETURN_TYPES = ("SEGS", )
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Detector"
+
+    @staticmethod
+    def doit(bbox_detector, sam2_model, image_frames, bbox_threshold, sam2_threshold, crop_factor, drop_size):
+        # ---- Check SAM2 model ----
+        if not isinstance(sam2_model, core.SAM2Wrapper):
+            logging.error("[Impact Pack] To use the SAM2VideoDetectorSEGS node, a valid SAM2 model must be provided as input to `sam2_model`.")
+            raise Exception("To use the SAM2VideoDetectorSEGS node, a SAM2 model must be provided as input to `sam2_model`.")
+
+        # ---- Detect bboxes ----
+        segs = bbox_detector.detect(image_frames[0].unsqueeze(0), bbox_threshold, 0, 0, drop_size)
+
+          # ---- If no detections, try reversed frames before giving up ----
+        if len(segs[1]) == 0:
+            reversed_frames = torch.flip(image_frames, dims=[0])
+            segs_rev = bbox_detector.detect(reversed_frames[0].unsqueeze(0), bbox_threshold, 0, 0, drop_size)
+
+            if len(segs_rev[1]) == 0:
+                # No Bboxes when reversed -> Give up
+                h, w = image_frames.shape[1:3]
+                return (((h, w), []), )
+                
+            # ---- Predict masks in reversed mode ----
+            segs_masks = sam2_model.predict_video_segs(reversed_frames, segs_rev)
+
+            # segs_masks wieder umdrehen, damit sie mit Originalframes matchen
+            for k in segs_masks.keys():
+                segs_masks[k] = torch.flip(segs_masks[k], dims=[0])
+        else:
+            # ---- Predict masks if BBOXES were found in forward pass----
+            segs_masks = sam2_model.predict_video_segs(image_frames, segs)
+
+        def get_whole_merged_mask(all_masks):
+            merged_mask = (all_masks[0] * 255).to(torch.uint8)
+            for mask in all_masks[1:]:
+                merged_mask |= (mask * 255).to(torch.uint8)
+
+            merged_mask = (merged_mask / 255.0).to(torch.float32)
+            merged_mask = utils.to_binary_mask(merged_mask, 0.1)[0]
+            return merged_mask
+
+        new_segs = []
+        for k, v in segs_masks.items():
+            v = v.squeeze(3)
+            m = get_whole_merged_mask(v)
+            seg = segs_nodes.MaskToSEGS.doit(m, False, crop_factor, False, drop_size, contour_fill=True)[0][1]
+
+            if len(seg) == 0:
+                continue
+
+            seg = seg[0]
+
+            x1, y1, x2, y2 = seg.crop_region
+            masks = []
+            for mask in v:
+                masks.append(mask[y1:y2, x1:x2])
+            cropped_mask = torch.stack(masks)
+            cropped_mask = (cropped_mask >= (sam2_threshold * 100 - 50)).to(torch.uint8).cpu()
+
+            new_seg = SEG(
+                seg.cropped_image,
+                cropped_mask,
+                seg.confidence,
+                seg.crop_region,
+                seg.bbox,
+                seg.label,
+                seg.control_net_wrapper
+            )
+            new_segs.append(new_seg)
+
+        return ((segs[0], new_segs), )
+
 
 
 class SimpleDetectorForAnimateDiff:

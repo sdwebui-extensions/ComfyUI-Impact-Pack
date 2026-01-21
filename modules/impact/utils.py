@@ -8,6 +8,7 @@ from . import config
 from PIL import Image
 import comfy
 import time
+import logging
 
 
 class TensorBatchBuilder:
@@ -65,6 +66,54 @@ def tensor_convert_rgb(image, prefer_copy=True):
 
     # NOTE: Same error message as in PIL, for easier googling :P
     raise ValueError(f"illegal conversion (channels: {n_channel} -> 3)")
+
+
+def resize_with_padding(image, target_w: int, target_h: int):
+    _tensor_check_image(image)
+    b, h, w, c = image.shape
+    image = image.permute(0, 3, 1, 2)  # B, C, H, W
+
+    scale = min(target_w / w, target_h / h)
+    new_w, new_h = int(w * scale), int(h * scale)
+
+    image = F.interpolate(image, size=(new_h, new_w), mode="bilinear", align_corners=False)
+
+    pad_left = (target_w - new_w) // 2
+    pad_right = target_w - new_w - pad_left
+    pad_top = (target_h - new_h) // 2
+    pad_bottom = target_h - new_h - pad_top
+
+    image = F.pad(image, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
+
+    image = image.permute(0, 2, 3, 1)  # B, H, W, C
+    return image, (pad_top, pad_bottom, pad_left, pad_right)
+
+
+def remove_padding(image, padding):
+    pad_top, pad_bottom, pad_left, pad_right = padding
+    return image[:, pad_top:image.shape[1] - pad_bottom, pad_left:image.shape[2] - pad_right, :]
+
+
+def adjust_bbox_after_resize(bbox, original_size, target_size, padding):
+    """
+    bbox: (x1, y1, x2, y2) in original image
+    original_size: (original_h, original_w)
+    target_size: (target_h, target_w)
+    padding: (pad_top, pad_bottom, pad_left, pad_right)
+    """
+    orig_h, orig_w = original_size
+    target_h, target_w = target_size
+    pad_top, pad_bottom, pad_left, pad_right = padding
+
+    scale = min(target_w / orig_w, target_h / orig_h)
+
+    # Apply scale
+    x1 = int(bbox[0] * scale + pad_left)
+    y1 = int(bbox[1] * scale + pad_top)
+    x2 = int(bbox[2] * scale + pad_left)
+    y2 = int(bbox[3] * scale + pad_top)
+
+    return x1, y1, x2, y2
 
 
 def general_tensor_resize(image, w: int, h: int):
@@ -142,8 +191,6 @@ def to_numpy(image):
     if isinstance(image, np.ndarray):
         return image
     raise ValueError(f"Cannot convert {type(image)} to numpy.ndarray")
-    
-
 
 def tensor_putalpha(image, mask):
     _tensor_check_image(image)
@@ -185,33 +232,33 @@ def tensor_paste(image1, image2, left_top, mask):
     _tensor_check_image(image1)
     _tensor_check_image(image2)
     _tensor_check_mask(mask)
-    
+
     if image2.shape[1:3] != mask.shape[1:3]:
         mask = resize_mask(mask.squeeze(dim=3), image2.shape[1:3]).unsqueeze(dim=3)
-    
+
     x, y = left_top
     _, h1, w1, c1 = image1.shape
     _, h2, w2, c2 = image2.shape
-    
+
     # Calculate image patch size
     w = min(w1, x + w2) - x
     h = min(h1, y + h2) - y
-    
+
     # If the patch is out of bound, nothing to do!
     if w <= 0 or h <= 0:
         return
-    
+
     mask = mask[:, :h, :w, :]
-    
+
     # Get the region to be modified
     region1 = image1[:, y:y+h, x:x+w, :]
     region2 = image2[:, :h, :w, :]
-    
+
     # Handle RGB and RGBA cases
     if c1 == 3 and c2 == 3:
         # Both RGB - simple case
         image1[:, y:y+h, x:x+w, :] = (1 - mask) * region1 + mask * region2
-    
+
     elif c1 == 4 and c2 == 4:
         # Both RGBA - need to handle alpha channel separately
         # RGB channels
@@ -219,13 +266,13 @@ def tensor_paste(image1, image2, left_top, mask):
             (1 - mask) * region1[:, :, :, :3] +
             mask * region2[:, :, :, :3]
         )
-        
+
         # Alpha channel - use "over" composition
         a1 = region1[:, :, :, 3:4]
         a2 = region2[:, :, :, 3:4] * mask
         new_alpha = a1 + a2 * (1 - a1)
         image1[:, y:y+h, x:x+w, 3:4] = new_alpha
-    
+
     elif c1 == 4 and c2 == 3:
         # Target is RGBA, source is RGB - assume source is fully opaque
         image1[:, y:y+h, x:x+w, :3] = (
@@ -234,7 +281,7 @@ def tensor_paste(image1, image2, left_top, mask):
         )
         # Alpha channel - reduce alpha where mask is applied
         image1[:, y:y+h, x:x+w, 3:4] = region1[:, :, :, 3:4] * (1 - mask) + mask
-    
+
     elif c1 == 3 and c2 == 4:
         # Target is RGB, source is RGBA - apply source alpha to mask
         effective_mask = mask * region2[:, :, :, 3:4]
@@ -242,7 +289,7 @@ def tensor_paste(image1, image2, left_top, mask):
             (1 - effective_mask) * region1 +
             effective_mask * region2[:, :, :, :3]
         )
-    
+
     return
 
 
@@ -551,10 +598,10 @@ def to_latent_image(pixels, vae, vae_tiled_encode=False):
     start = time.time()
     if vae_tiled_encode:
         encoded = nodes.VAEEncodeTiled().encode(vae, pixels, 512, overlap=64)[0] # using default settings
-        print(f"[Impact Pack] vae encoded (tiled) in {time.time() - start:.1f}s")
+        logging.info(f"[Impact Pack] vae encoded (tiled) in {time.time() - start:.1f}s")
     else:
         encoded = nodes.VAEEncode().encode(vae, pixels)[0]
-        print(f"[Impact Pack] vae encoded in {time.time() - start:.1f}s")
+        logging.info(f"[Impact Pack] vae encoded in {time.time() - start:.1f}s")
 
     return encoded
 
@@ -639,8 +686,8 @@ def try_install_custom_node(custom_node_url, msg):
         cm_global.try_call(api='cm.try-install-custom-node',
                            sender="Impact Pack", custom_node_url=custom_node_url, msg=msg)
     except Exception:
-        print(msg)
-        print(f"[Impact Pack] ComfyUI-Manager is outdated. The custom node installation feature is not available.")
+        logging.info(msg)
+        logging.info("[Impact Pack] ComfyUI-Manager is outdated. The custom node installation feature is not available.")
 
 
 # author: Trung0246 --->

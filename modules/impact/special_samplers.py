@@ -1,11 +1,14 @@
 import math
 import impact.core as core
 from comfy_extras.nodes_custom_sampler import Noise_RandomNoise
-from impact.utils import *
 from nodes import MAX_RESOLUTION
 import nodes
 from impact.impact_sampling import KSamplerWrapper, KSamplerAdvancedWrapper, separated_sample, impact_sample
 import comfy
+import torch
+import numpy as np
+import logging
+
 
 class TiledKSamplerProvider:
     @classmethod
@@ -47,7 +50,7 @@ class KSamplerProvider:
                                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "total sampling steps"}),
                                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "tooltip": "classifier free guidance value"}),
                                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"tooltip": "sampler"}),
-                                "scheduler": (core.SCHEDULERS, {"tooltip": "noise schedule"}),
+                                "scheduler": (core.get_schedulers(), {"tooltip": "noise schedule"}),
                                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned."}),
                                 "basic_pipe": ("BASIC_PIPE", {"tooltip": "basic_pipe input for sampling"})
                              },
@@ -76,7 +79,7 @@ class KSamplerAdvancedProvider:
         return {"required": {
                                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "toolip": "classifier free guidance value"}),
                                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"toolip": "sampler"}),
-                                "scheduler": (core.SCHEDULERS, {"toolip": "noise schedule"}),
+                                "scheduler": (core.get_schedulers(), {"toolip": "noise schedule"}),
                                 "sigma_factor": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "toolip": "Multiplier of noise schedule"}),
                                 "basic_pipe": ("BASIC_PIPE", {"toolip": "basic_pipe input for sampling"})
                              },
@@ -239,7 +242,7 @@ class CombineConditionings:
             res += v
 
         return (res, )
-    
+
 
 class ConcatConditionings:
     @classmethod
@@ -263,7 +266,7 @@ class ConcatConditionings:
         for k, conditioning_from in list(kwargs.items())[1:]:
             out = []
             if len(conditioning_from) > 1:
-                print("Warning: ConcatConditionings {k} contains more than 1 cond, only the first one will actually be applied to conditioning1.")
+                logging.warning("Warning: ConcatConditionings {k} contains more than 1 cond, only the first one will actually be applied to conditioning1.")
 
             cond_from = conditioning_from[0][0]
 
@@ -276,8 +279,8 @@ class ConcatConditionings:
             conditioning_to = out
 
         return (out, )
-    
-    
+
+
 class RegionalSampler:
     @classmethod
     def INPUT_TYPES(s):
@@ -425,7 +428,7 @@ class RegionalSampler:
             add_noise = False
 
         # finalize
-        core.update_node_status(unique_id, f"finalize")
+        core.update_node_status(unique_id, "finalize")
         if base_latent_image is not None:
             new_latent_image = base_latent_image
         else:
@@ -546,7 +549,7 @@ class RegionalSamplerAdvanced:
                 j += 1
 
         # finalize
-        core.update_node_status(unique_id, f"finalize")
+        core.update_node_status(unique_id, "finalize")
         if base_latent_image is not None:
             new_latent_image = base_latent_image
         else:
@@ -577,7 +580,7 @@ class KSamplerBasicPipe:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "total sampling steps"}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "tooltip": "classifier free guidance value"}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"tooltip": "sampler"}),
-                     "scheduler": (core.SCHEDULERS, {"tooltip": "noise schedule"}),
+                     "scheduler": (core.get_schedulers(), {"tooltip": "noise schedule"}),
                      "latent_image": ("LATENT", {"tooltip": "input latent image"}),
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of noise to remove. This amount is the noise added at the start, and the higher it is, the more the input latent will be modified before being returned."}),
                      },
@@ -611,7 +614,7 @@ class KSamplerAdvancedBasicPipe:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "total sampling steps"}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "tooltip": "classifier free guidance value"}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"tooltip": "sampler"}),
-                     "scheduler": (core.SCHEDULERS, {"tooltip": "noise schedule"}),
+                     "scheduler": (core.get_schedulers(), {"tooltip": "noise schedule"}),
                      "latent_image": ("LATENT", {"tooltip": "input latent image"}),
                      "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000, "tooltip": "The starting step of the sampling to be applied at this node within the range of 'steps'."}),
                      "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000, "tooltip": "The step at which sampling applied at this node will stop within the range of steps (if greater than steps, sampling will continue only up to steps)."}),
